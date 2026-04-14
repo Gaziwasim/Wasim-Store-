@@ -1,0 +1,115 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: products
+    // Fields: name (string), price (number), unit (string), category (string), image (string), createdAt (timestamp)
+    //
+    // Collection: orders
+    // Fields: customerName (string), customerPhone (string), customerAddress (string), items (list), totalPrice (number), status (string), paymentMethod (string), createdAt (timestamp)
+    //
+    // Collection: config
+    // Document: store
+    // Fields: bkashNumber (string), nagadNumber (string), storeAddress (string), storePhone (string)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == get(/databases/$(database)/documents/config/store).data.adminEmail || 
+         request.auth.token.email == "mdgaziwasim@gmail.com");
+    }
+
+    function isValidProduct(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.price is number && data.price >= 0 &&
+             data.unit is string && data.unit.size() > 0 &&
+             data.category is string &&
+             data.image is string;
+    }
+
+    function isValidOrder(data) {
+      return data.customerName is string && data.customerName.size() > 0 &&
+             data.customerPhone is string && data.customerPhone.size() >= 11 &&
+             data.customerAddress is string && data.customerAddress.size() > 0 &&
+             data.items is list && data.items.size() > 0 &&
+             data.totalPrice is number && data.totalPrice >= 0 &&
+             data.status in ['pending', 'confirmed', 'delivered', 'cancelled'] &&
+             (!('location' in data) || data.location == null || (data.location.lat is number && data.location.lng is number));
+    }
+
+    function isValidCustomer(data) {
+      return data.name is string && data.name.size() > 0 &&
+             data.phone is string && data.phone.size() >= 11;
+    }
+
+    // Products
+    match /products/{productId} {
+      allow read: if true; // Publicly readable
+      allow create: if isAdmin() && isValidProduct(request.resource.data);
+      allow update: if isAdmin() || 
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stockQuantity', 'soldCount']));
+      allow delete: if isAdmin();
+    }
+
+    // Orders
+    match /orders/{orderId} {
+      allow create: if isValidOrder(request.resource.data);
+      allow read, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Customers
+    match /customers/{phone} {
+      allow read: if isAdmin() || (phoneUser() != null && phoneUser().phone == phone);
+      allow write: if isValidCustomer(request.resource.data);
+    }
+
+    function phoneUser() {
+      // This is a placeholder as we don't have a specific auth token for phone users in this simple setup
+      // In a real app, we'd use request.auth.uid or similar.
+      // For now, we'll allow write if it's a valid customer object.
+      return null; 
+    }
+
+    // Config
+    match /config/store {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Categories
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Reviews
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if request.resource.data.rating >= 1 && 
+                      request.resource.data.rating <= 5 &&
+                      request.resource.data.comment is string &&
+                      request.resource.data.comment.size() > 0 && 
+                      request.resource.data.comment.size() < 1000 &&
+                      request.resource.data.customerName is string &&
+                      request.resource.data.customerName.size() > 0;
+      allow delete: if isAdmin();
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

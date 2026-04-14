@@ -1,0 +1,5 @@
+{
+  "name": "Wasim Store",
+  "description": "ওয়াসিম স্টোর - একটি আধুনিক মোদী মাল বিক্রয় কেন্দ্র। এখানে আপনি চাল, ডাল, তেল সহ নিত্যপ্রয়োজনীয় সব পণ্য পাবেন।",
+  "requestFramePermissions": ["geolocation"]
+}

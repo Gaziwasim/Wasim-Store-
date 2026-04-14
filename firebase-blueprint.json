@@ -1,0 +1,113 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "A product available in the store",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the product" },
+        "price": { "type": "number", "description": "Price of the product" },
+        "unit": { "type": "string", "description": "Unit of measurement (e.g., kg, liter)" },
+        "category": { "type": "string", "description": "Category of the product" },
+        "image": { "type": "string", "description": "URL of the product image" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the product was added" }
+      },
+      "required": ["name", "price", "unit", "category", "image"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A customer order",
+      "type": "object",
+      "properties": {
+        "customerName": { "type": "string", "description": "Name of the customer" },
+        "customerPhone": { "type": "string", "description": "Phone number of the customer" },
+        "customerAddress": { "type": "string", "description": "Delivery address" },
+        "items": { "type": "array", "description": "List of items ordered" },
+        "totalPrice": { "type": "number", "description": "Total price of the order" },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "delivered", "cancelled"], "description": "Current status of the order" },
+        "paymentMethod": { "type": "string", "description": "Method of payment (e.g., bKash, Cash on Delivery)" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the order was placed" }
+      },
+      "required": ["customerName", "customerPhone", "customerAddress", "items", "totalPrice", "status"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "A customer review for the store or a product",
+      "type": "object",
+      "properties": {
+        "customerName": { "type": "string", "description": "Name of the reviewer" },
+        "rating": { "type": "number", "description": "Rating from 1 to 5" },
+        "comment": { "type": "string", "description": "Review text" },
+        "productId": { "type": "string", "description": "Optional ID of the product being reviewed" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the review was submitted" }
+      },
+      "required": ["customerName", "rating", "comment", "createdAt"]
+    },
+    "StoreConfig": {
+      "title": "StoreConfig",
+      "description": "General store configuration",
+      "type": "object",
+      "properties": {
+        "bkashNumber": { "type": "string", "description": "bKash payment number" },
+        "nagadNumber": { "type": "string", "description": "Nagad payment number" },
+        "storeAddress": { "type": "string", "description": "Physical address of the store" },
+        "storePhone": { "type": "string", "description": "Contact phone number" },
+        "storeLogo": { "type": "string", "description": "Base64 or URL of store logo" },
+        "heroTitle": { "type": "string", "description": "Title for the offer section" },
+        "heroSubtext": { "type": "string", "description": "Subtext for the offer section" },
+        "heroImage": { "type": "string", "description": "Image for the offer section" },
+        "adminEmail": { "type": "string", "description": "Email of the store administrator" },
+        "adminPassword": { "type": "string", "description": "Password for admin panel access" }
+      }
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "A registered customer",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the customer" },
+        "phone": { "type": "string", "description": "Phone number of the customer" },
+        "image": { "type": "string", "description": "Profile picture URL or Base64" },
+        "lastLogin": { "type": "string", "format": "date-time", "description": "When the customer last logged in" }
+      },
+      "required": ["name", "phone"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "A store notification for customers",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Title of the notification" },
+        "message": { "type": "string", "description": "Content of the notification" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the notification was sent" }
+      },
+      "required": ["title", "message"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Collection of products"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Collection of customer orders"
+    },
+    "/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Collection of customer reviews"
+    },
+    "/config/store": {
+      "schema": "StoreConfig",
+      "description": "Store configuration document"
+    },
+    "/customers/{phone}": {
+      "schema": "Customer",
+      "description": "Collection of registered customers"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "Collection of store notifications"
+    }
+  }
+}
