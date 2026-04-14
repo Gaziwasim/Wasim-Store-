@@ -36,10 +36,24 @@ import {
   MapPin,
   Bell,
   Camera,
+  Video,
   Copy,
   ArrowLeft,
   User as UserIcon
 } from "lucide-react";
+
+const WhatsAppIcon = ({ size = 16, className = "" }: { size?: number, className?: string }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="currentColor" 
+    className={className}
+  >
+    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L0 24l6.335-1.662c1.72.94 3.659 1.437 5.63 1.438h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+  </svg>
+);
+
 import { db, auth, loginWithGoogle, logout } from "./firebase";
 import { 
   collection, 
@@ -141,6 +155,8 @@ interface StoreConfig {
   adminPassword?: string;
   announcementText?: string;
   showAnnouncement?: boolean;
+  promoButtonTitle?: string;
+  promoButtonLink?: string;
 }
 
 enum OperationType {
@@ -281,7 +297,6 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [reviews, setReviews] = useState<any[]>([]);
   const [config, setConfig] = useState<StoreConfig>({
     storeName: "ওয়াসিম স্টোর",
     storeSubtext: "মোদী মাল বিক্রেতা",
@@ -347,12 +362,6 @@ export default function App() {
   const [orderFilter, setOrderFilter] = useState<"pending" | "delivered">("pending");
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
-
-  const [reviewInput, setReviewInput] = useState({
-    customerName: "",
-    rating: 5,
-    comment: ""
-  });
 
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [lastOrderCount, setLastOrderCount] = useState<number | null>(null);
@@ -507,14 +516,6 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, "categories", setToastMessage, setShowToast);
     });
 
-    const qReviews = query(collection(db, "reviews"), orderBy("createdAt", "desc"), limit(10));
-    const unsubscribeReviews = onSnapshot(qReviews, (snapshot) => {
-      const rList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setReviews(rList);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "reviews", setToastMessage, setShowToast);
-    });
-
     const unsubscribeConfig = onSnapshot(doc(db, "config", "store"), (docSnap) => {
       if (docSnap.exists()) {
         setConfig(docSnap.data() as StoreConfig);
@@ -547,7 +548,6 @@ export default function App() {
       unsubscribeAuth();
       unsubscribeProducts();
       unsubscribeCategories();
-      unsubscribeReviews();
       unsubscribeConfig();
       unsubscribeNotifications();
     };
@@ -1220,27 +1220,6 @@ export default function App() {
     }
   };
 
-  const handleReviewSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!reviewInput.customerName || !reviewInput.comment) {
-      setToastMessage("দয়া করে নাম এবং মন্তব্য লিখুন।");
-      setShowToast(true);
-      return;
-    }
-
-    try {
-      await addDoc(collection(db, "reviews"), {
-        ...reviewInput,
-        createdAt: serverTimestamp()
-      });
-      setReviewInput({ customerName: "", rating: 5, comment: "" });
-      setToastMessage("আপনার রিভিউ দেওয়ার জন্য ধন্যবাদ!");
-      setShowToast(true);
-    } catch (error) {
-      console.error("Review error:", error);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-[#fdfcf8] text-[#2d2d2d] font-sans overflow-x-hidden">
       {/* Announcement Bar */}
@@ -1503,18 +1482,18 @@ export default function App() {
                           >Nagad</Button>
                         </div>
                         {checkoutInfo.paymentMethod !== 'Cash on Delivery' && (
-                          <div className="space-y-2 p-3 bg-green-50 rounded-2xl border border-green-100">
+                          <div className="space-y-3 p-4 bg-green-50 rounded-2xl border border-green-100">
                             <p className="text-[10px] text-center text-green-700 font-bold uppercase tracking-wider">
-                              {checkoutInfo.paymentMethod} পেমেন্ট
+                              {checkoutInfo.paymentMethod} পেমেন্ট নির্দেশিকা
                             </p>
-                            <div className="flex items-center justify-center gap-2">
+                            <div className="flex items-center justify-center gap-2 bg-white p-2 rounded-xl border border-green-100">
                               <span className="text-sm font-black text-green-900">
                                 {checkoutInfo.paymentMethod === 'bKash' ? config.bkashNumber : config.nagadNumber}
                               </span>
                               <Button 
                                 size="icon" 
                                 variant="ghost" 
-                                className="h-6 w-6 text-green-600 hover:bg-white rounded-full"
+                                className="h-8 w-8 text-green-600 hover:bg-green-50 rounded-full"
                                 onClick={() => {
                                   const num = checkoutInfo.paymentMethod === 'bKash' ? config.bkashNumber : config.nagadNumber;
                                   navigator.clipboard.writeText(num);
@@ -1522,28 +1501,61 @@ export default function App() {
                                   setShowToast(true);
                                 }}
                               >
-                                <Copy size={12} />
+                                <Copy size={14} />
                               </Button>
                             </div>
-                            <div className="flex justify-center gap-2">
-                              {checkoutInfo.paymentMethod === 'bKash' && config.bkashNumber && (
-                                <Button 
-                                  size="sm" 
-                                  variant="outline" 
-                                  className="text-[10px] h-8 bg-pink-50 text-pink-700 border-pink-200 rounded-xl px-4"
-                                  onClick={() => window.open(`tel:*247#`)}
-                                >
-                                  বিকাশ ডায়াল (*২৪৭#)
-                                </Button>
+                            <div className="grid grid-cols-2 gap-2">
+                              {checkoutInfo.paymentMethod === 'bKash' && (
+                                <>
+                                  <Button 
+                                    size="sm" 
+                                    className="text-[10px] h-9 bg-pink-600 hover:bg-pink-700 text-white rounded-xl font-bold"
+                                    onClick={() => window.open(`https://www.bkash.com/app/`)}
+                                  >
+                                    বিকাশ অ্যাপ ওপেন
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="text-[10px] h-9 border-pink-200 text-pink-700 rounded-xl"
+                                    onClick={() => window.open(`tel:*247#`)}
+                                  >
+                                    ডায়াল *২৪৭#
+                                  </Button>
+                                </>
                               )}
-                              {checkoutInfo.paymentMethod === 'Nagad' && config.nagadNumber && (
+                              {checkoutInfo.paymentMethod === 'Nagad' && (
+                                <>
+                                  <Button 
+                                    size="sm" 
+                                    className="text-[10px] h-9 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold"
+                                    onClick={() => window.open(`https://nagad.com.bd/`)}
+                                  >
+                                    নগদ অ্যাপ ওপেন
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="text-[10px] h-9 border-red-200 text-red-700 rounded-xl"
+                                    onClick={() => window.open(`tel:*167#`)}
+                                  >
+                                    ডায়াল *১৬৭#
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                            <div className="pt-2 border-t border-green-100">
+                              <p className="text-[9px] text-center text-green-600 italic">
+                                পেমেন্ট করার পর স্ক্রিনশটটি আমাদের হোয়াটসঅ্যাপে পাঠান।
+                              </p>
+                              {config.whatsappNumber && (
                                 <Button 
                                   size="sm" 
-                                  variant="outline" 
-                                  className="text-[10px] h-8 bg-red-50 text-red-700 border-red-200 rounded-xl px-4"
-                                  onClick={() => window.open(`tel:*167#`)}
+                                  variant="link" 
+                                  className="w-full text-[10px] text-green-700 font-bold h-6"
+                                  onClick={() => window.open(`https://wa.me/${config.whatsappNumber.replace(/\D/g, '')}?text=${encodeURIComponent('আসসালামু আলাইকুম, আমি পেমেন্ট করেছি। এই নিন স্ক্রিনশট।')}`)}
                                 >
-                                  নগদ ডায়াল (*১৬৭#)
+                                  স্ক্রিনশট পাঠাতে এখানে ক্লিক করুন
                                 </Button>
                               )}
                             </div>
@@ -1657,23 +1669,26 @@ export default function App() {
             </section>
 
             {/* Category Filters */}
-            <div className="mb-8 overflow-x-auto pb-2 scrollbar-hide">
-              <div className="flex gap-2 min-w-max">
-                {categoryList.map(cat => (
-                  <Button
-                    key={cat}
-                    variant={selectedCategory === cat ? "default" : "outline"}
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`rounded-full px-6 transition-all ${
-                      selectedCategory === cat 
-                        ? "bg-green-600 hover:bg-green-700 shadow-lg shadow-green-100" 
-                        : "border-green-200 text-green-700 hover:bg-green-50"
-                    }`}
-                  >
-                    {cat}
-                  </Button>
-                ))}
+            <div className="mb-6 relative">
+              <div className="overflow-x-auto pb-3 scrollbar-hide -mx-4 px-4">
+                <div className="flex gap-1.5 min-w-max">
+                  {categoryList.map(cat => (
+                    <Button
+                      key={cat}
+                      variant={selectedCategory === cat ? "default" : "outline"}
+                      onClick={() => setSelectedCategory(cat)}
+                      className={`rounded-full px-3.5 transition-all h-8 text-[11px] font-medium ${
+                        selectedCategory === cat 
+                          ? "bg-green-600 hover:bg-green-700 shadow-md shadow-green-100" 
+                          : "border-green-200 text-green-700 hover:bg-green-50"
+                      }`}
+                    >
+                      {cat}
+                    </Button>
+                  ))}
+                </div>
               </div>
+              <div className="absolute right-0 top-0 bottom-3 w-8 bg-gradient-to-l from-[#fdfcf8] to-transparent pointer-events-none md:hidden" />
             </div>
 
             {/* Product Grid */}
@@ -1733,99 +1748,7 @@ export default function App() {
             )}
 
             {/* Reviews Section for Customers */}
-            {isCustomerMode && (
-              <div className="mt-16" id="review-section">
-                <div className="mb-6 flex items-center justify-between">
-                  <div>
-                    <h2 className="text-xl font-bold text-green-800">কাস্টমার রিভিউ</h2>
-                    <p className="text-xs text-muted-foreground">আমাদের সম্পর্কে মতামত</p>
-                  </div>
-                  <div className="flex items-center gap-1 text-amber-500">
-                    <Star className="fill-amber-500" size={16} />
-                    <span className="text-lg font-bold">৪.৯/৫</span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                  {/* Review Form */}
-                  <Card className="h-fit border-none shadow-sm rounded-2xl bg-green-50/30">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-sm flex items-center gap-2">
-                        <MessageSquare className="text-green-600" size={16} />
-                        আপনার মতামত দিন
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <form onSubmit={handleReviewSubmit} className="space-y-3">
-                        <Input 
-                          placeholder="আপনার নাম"
-                          value={reviewInput.customerName}
-                          onChange={(e) => setReviewInput({...reviewInput, customerName: e.target.value})}
-                          className="rounded-xl h-9 text-xs"
-                        />
-                        <div className="flex justify-center gap-2 py-1">
-                          {[1, 2, 3, 4, 5].map((num) => (
-                            <button
-                              key={num}
-                              type="button"
-                              onClick={() => setReviewInput({...reviewInput, rating: num})}
-                              className={`transition-colors ${reviewInput.rating >= num ? "text-amber-500" : "text-gray-300"}`}
-                            >
-                              <Star className={reviewInput.rating >= num ? "fill-amber-500" : ""} size={20} />
-                            </button>
-                          ))}
-                        </div>
-                        <textarea 
-                          className="w-full min-h-[60px] rounded-xl border border-input bg-white px-3 py-2 text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 disabled:cursor-not-allowed disabled:opacity-50"
-                          placeholder="আপনার অভিজ্ঞতা..."
-                          value={reviewInput.comment}
-                          onChange={(e) => setReviewInput({...reviewInput, comment: e.target.value})}
-                        />
-                        <Button type="submit" size="sm" className="w-full bg-green-600 hover:bg-green-700 rounded-xl font-bold text-xs h-9">
-                          জমা দিন
-                        </Button>
-                      </form>
-                    </CardContent>
-                  </Card>
-
-                  {/* Review List */}
-                  <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {reviews.length === 0 ? (
-                      <div className="col-span-full flex h-32 items-center justify-center rounded-2xl border-2 border-dashed border-gray-100 text-muted-foreground text-xs">
-                        এখনো কোনো রিভিউ নেই।
-                      </div>
-                    ) : (
-                      reviews.slice(0, 4).map((review, idx) => (
-                        <motion.div
-                          key={review.id || idx}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: idx * 0.1 }}
-                        >
-                          <Card className="border-none shadow-sm rounded-2xl h-full">
-                            <CardContent className="p-4">
-                              <div className="mb-1 flex items-center justify-between">
-                                <span className="font-bold text-green-800 text-xs">{review.customerName}</span>
-                                <div className="flex gap-0.5">
-                                  {[1, 2, 3, 4, 5].map((num) => (
-                                    <Star 
-                                      key={num} 
-                                      size={10} 
-                                      className={review.rating >= num ? "fill-amber-500 text-amber-500" : "text-gray-200"} 
-                                    />
-                                  ))}
-                                </div>
-                              </div>
-                              <p className="text-[11px] text-gray-600 italic line-clamp-2">"{review.comment}"</p>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* Review section removed as per user request */}
           </>
         )}
 
@@ -1991,44 +1914,6 @@ export default function App() {
                         <h4 className="font-bold mb-1">Add to Home Screen</h4>
                         <p className="text-sm text-muted-foreground">সেখান থেকে "Add to Home Screen" অপশনটি সিলেক্ট করুন। এখন আপনার মোবাইলের হোম স্ক্রিনে অ্যাপের আইকন চলে আসবে।</p>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="rounded-3xl border-none shadow-lg overflow-hidden">
-                  <CardHeader className="bg-gray-50 border-b">
-                    <CardTitle className="flex items-center gap-2">
-                      <Phone className="h-5 w-5 text-green-700" />
-                      যোগাযোগ করুন
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-8">
-                    <p className="text-muted-foreground mb-4">যেকোনো প্রয়োজনে আমাদের কল করুন অথবা সরাসরি দোকানে চলে আসুন।</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="p-4 rounded-2xl bg-green-50 border border-green-100">
-                        <p className="text-xs text-green-600 font-bold uppercase tracking-wider mb-1">ফোন</p>
-                        <a href={`tel:${config.storePhone}`} className="font-bold hover:text-green-700 transition-colors">{config.storePhone}</a>
-                      </div>
-                      <div className="p-4 rounded-2xl bg-green-50 border border-green-100">
-                        <p className="text-xs text-green-600 font-bold uppercase tracking-wider mb-1">ঠিকানা</p>
-                        <p className="font-bold">{config.storeAddress}</p>
-                      </div>
-                      {config.whatsappNumber && (
-                        <div className="p-4 rounded-2xl bg-green-50 border border-green-100">
-                          <p className="text-xs text-green-600 font-bold uppercase tracking-wider mb-1">হোয়াটসঅ্যাপ</p>
-                          <a href={`https://wa.me/${config.whatsappNumber.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="font-bold hover:text-green-700 transition-colors flex items-center gap-2">
-                            <MessageSquare size={16} /> {config.whatsappNumber}
-                          </a>
-                        </div>
-                      )}
-                      {config.imoNumber && (
-                        <div className="p-4 rounded-2xl bg-green-50 border border-green-100">
-                          <p className="text-xs text-green-600 font-bold uppercase tracking-wider mb-1">ইমু</p>
-                          <a href={`imo://chat?phone=${config.imoNumber.replace(/\D/g, '')}`} className="font-bold hover:text-green-700 transition-colors flex items-center gap-2">
-                            <Phone size={16} /> {config.imoNumber}
-                          </a>
-                        </div>
-                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -2461,6 +2346,10 @@ export default function App() {
                       <Input placeholder="দোকানের ঠিকানা" value={config.storeAddress} onChange={e => setConfig({...config, storeAddress: e.target.value})} />
                       <Input placeholder="ফোন নাম্বার" value={config.storePhone} onChange={e => setConfig({...config, storePhone: e.target.value})} />
                       <Input placeholder="দোকানের ইমেইল" value={config.storeEmail} onChange={e => setConfig({...config, storeEmail: e.target.value})} />
+                      <div className="grid grid-cols-2 gap-4">
+                        <Input placeholder="প্রোমো বাটন টাইটেল" value={config.promoButtonTitle} onChange={e => setConfig({...config, promoButtonTitle: e.target.value})} />
+                        <Input placeholder="প্রোমো বাটন লিঙ্ক" value={config.promoButtonLink} onChange={e => setConfig({...config, promoButtonLink: e.target.value})} />
+                      </div>
                       <Button onClick={handleUpdateConfig} className="w-full bg-blue-600">সেটিংস সেভ করুন</Button>
                     </CardContent>
                   </Card>
@@ -2863,39 +2752,44 @@ export default function App() {
       </AnimatePresence>
 
       {/* Footer */}
-      <footer className="mt-20 border-t bg-white py-12">
+      <footer className="mt-20 border-t bg-white py-8">
         <div className="container mx-auto px-4">
-          <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
-            <div>
-              <div className="mb-4 flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-green-600 text-white">
-                  <Store size={18} />
-                </div>
-                <span className="text-lg font-bold text-green-800">{config.storeName || "ওয়াসিম স্টোর"}</span>
+          <div className="flex flex-col items-center text-center space-y-6">
+            <div className="flex flex-wrap justify-center gap-3">
+              <Button 
+                size="sm" 
+                variant="outline" 
+                className="rounded-full border-green-200 text-green-700 hover:bg-green-50 h-9 px-4 text-xs"
+                onClick={() => window.open(`tel:${config.storePhone}`)}
+              >
+                <Phone size={14} className="mr-2" /> কল করুন
+              </Button>
+              {config.whatsappNumber && (
+                <Button 
+                  size="sm" 
+                  className="rounded-full bg-green-600 hover:bg-green-700 text-white h-9 px-4 text-xs"
+                  onClick={() => window.open(`https://wa.me/${config.whatsappNumber.replace(/\D/g, '')}`)}
+                >
+                  <WhatsAppIcon size={14} className="mr-2" /> হোয়াটসঅ্যাপ
+                </Button>
+              )}
+            </div>
+            
+            {config.promoButtonTitle && config.promoButtonLink && (
+              <div className="w-full max-w-xs mx-auto">
+                <Button 
+                  onClick={() => window.open(config.promoButtonLink, '_blank')}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold h-11 rounded-2xl shadow-lg shadow-blue-100 text-sm"
+                >
+                  {config.promoButtonTitle}
+                </Button>
               </div>
-              <p className="text-sm text-muted-foreground leading-relaxed">
-                আমরা দিচ্ছি সেরা মানের মোদী মাল সরাসরি আপনার দরজায়। আমাদের লক্ষ্য হলো বিশুদ্ধতা এবং বিশ্বাসযোগ্যতা।
-              </p>
+            )}
+
+            <div className="text-[10px] text-muted-foreground space-y-1">
+              <p>ঠিকানা: {config.storeAddress}</p>
+              <p>© ২০২৬ {config.storeName || "ওয়াসিম স্টোর"}। সর্বস্বত্ব সংরক্ষিত।</p>
             </div>
-            <div>
-              <h4 className="mb-4 font-bold">যোগাযোগ</h4>
-              <ul className="space-y-2 text-sm text-muted-foreground">
-                <li>ঠিকানা: {config.storeAddress}</li>
-                <li>ফোন: <a href={`tel:${config.storePhone}`} className="hover:text-green-700">{config.storePhone}</a></li>
-                <li>ইমেইল: {config.storeEmail}</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="mb-4 font-bold">পেমেন্ট মেথড</h4>
-              <div className="flex gap-4">
-                <Badge variant="outline" className="px-3 py-1">বিকাশ</Badge>
-                <Badge variant="outline" className="px-3 py-1">নগদ</Badge>
-                <Badge variant="outline" className="px-3 py-1">ক্যাশ অন ডেলিভারি</Badge>
-              </div>
-            </div>
-          </div>
-          <div className="mt-12 border-t pt-8 text-center text-xs text-muted-foreground">
-            © ২০২৬ {config.storeName || "ওয়াসিম স্টোর"}। সর্বস্বত্ব সংরক্ষিত।
           </div>
         </div>
       </footer>
