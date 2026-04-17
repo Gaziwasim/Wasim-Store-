@@ -3,19 +3,24 @@
   "short_name": "ওয়াসিম স্টোর",
   "description": "সেরা মানের মোদী মাল সরাসরি আপনার দরজায়",
   "start_url": "/?s",
+  "id": "/?s",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#166534",
   "icons": [
     {
       "src": "https://picsum.photos/seed/store/192/192",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
       "src": "https://picsum.photos/seed/store/512/512",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

@@ -39,6 +39,10 @@ import {
   Video,
   Copy,
   ArrowLeft,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  Zap,
   User as UserIcon
 } from "lucide-react";
 
@@ -69,6 +73,7 @@ import {
   serverTimestamp,
   setDoc,
   getDoc,
+  getDocs,
   writeBatch,
   increment
 } from "firebase/firestore";
@@ -113,6 +118,7 @@ interface Customer {
   name: string;
   image?: string;
   lastLogin?: any;
+  isBlocked?: boolean;
 }
 
 interface Order {
@@ -142,10 +148,8 @@ interface StoreConfig {
   bkashNumber: string;
   nagadNumber: string;
   whatsappNumber?: string;
-  imoNumber?: string;
   storeAddress: string;
   storePhone: string;
-  storeEmail?: string;
   storeLogo?: string;
   appIcon?: string;
   heroTitle?: string;
@@ -157,6 +161,13 @@ interface StoreConfig {
   showAnnouncement?: boolean;
   promoButtonTitle?: string;
   promoButtonLink?: string;
+  promoServiceImage?: string;
+  promoServiceTitle?: string;
+  promoServiceDescription?: string;
+  promoServiceDefaultAmount?: number;
+  promoServiceButtonText?: string;
+  showPromoService?: boolean;
+  orderSuccessMsg?: string;
 }
 
 enum OperationType {
@@ -303,10 +314,8 @@ export default function App() {
     bkashNumber: "",
     nagadNumber: "",
     whatsappNumber: "",
-    imoNumber: "",
     storeAddress: "বাজার রোড, ঢাকা",
     storePhone: "+৮৮০ ১২৩৪৫৬৭৮৯০",
-    storeEmail: "wasimstore@example.com",
     storeLogo: "https://picsum.photos/seed/store/192/192",
     appIcon: "https://picsum.photos/seed/store/512/512",
     heroTitle: "সেরা মানের মোদী মাল এখন আপনার হাতের নাগালে",
@@ -314,8 +323,10 @@ export default function App() {
     adminEmail: "mdgaziwasim@gmail.com",
     adminPassword: "",
     announcementText: "১০০ টাকার পণ্য ক্রয় করলে ডেলিভারি ফ্রি!",
-    showAnnouncement: true
+    showAnnouncement: true,
+    orderSuccessMsg: "আপনার অর্ডারটি সফল হয়েছে! আমরা খুব দ্রুত আপনার সাথে যোগাযোগ করব।"
   });
+  const [isAppLoading, setIsAppLoading] = useState(true);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("সব");
@@ -328,9 +339,35 @@ export default function App() {
   const [nameInput, setNameInput] = useState("");
   const [customerOrders, setCustomerOrders] = useState<Order[]>([]);
   const [notifications, setNotifications] = useState<StoreNotification[]>([]);
-  const [customers, setCustomers] = useState<any[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [showPromoModal, setShowPromoModal] = useState(false);
+  const [promoAmount, setPromoAmount] = useState("");
+  const [isPlacingPromoOrder, setIsPlacingPromoOrder] = useState(false);
+  const [isFetchingLocation, setIsFetchingLocation] = useState(false);
+
+  const getUserLocation = async () => {
+    setIsFetchingLocation(true);
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, { 
+          timeout: 10000,
+          enableHighAccuracy: true 
+        });
+      });
+      setIsFetchingLocation(false);
+      return {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude
+      };
+    } catch (e) {
+      console.log("Location access denied or failed:", e);
+      setIsFetchingLocation(false);
+      return null;
+    }
+  };
+  const [adminSubTab, setAdminSubTab] = useState<"products" | "orders" | "users" | "settings">("orders");
   const [passwordInput, setPasswordInput] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -397,7 +434,7 @@ export default function App() {
     stockQuantity: 0,
     soldCount: 0
   });
-  const [isCustomerMode, setIsCustomerMode] = useState(false);
+  const [isCustomerMode, setIsCustomerMode] = useState(true);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallButton, setShowInstallButton] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
@@ -425,7 +462,9 @@ export default function App() {
   }, []);
 
   const handleInstallApp = async () => {
-    if (!deferredPrompt) return;
+    if (!deferredPrompt) {
+      return;
+    }
     deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') {
@@ -457,6 +496,9 @@ export default function App() {
       sessionStorage.removeItem('forceAdmin');
     } else if (sessionStorage.getItem('forceAdmin') === 'true') {
       setIsCustomerMode(false);
+    } else {
+      // Default to customer mode if no params and no forceAdmin
+      setIsCustomerMode(true);
     }
 
     if (params.has('install')) {
@@ -497,7 +539,14 @@ export default function App() {
     // Load phone user from localStorage
     const savedPhoneUser = localStorage.getItem('phoneUser');
     if (savedPhoneUser) {
-      setPhoneUser(JSON.parse(savedPhoneUser));
+      const parsed = JSON.parse(savedPhoneUser);
+      setPhoneUser(parsed);
+      setCheckoutInfo(prev => ({
+        ...prev,
+        name: parsed.name || prev.name,
+        phone: parsed.phone || prev.phone,
+        address: parsed.address || prev.address
+      }));
     }
 
     const qProducts = query(collection(db, "products"), orderBy("name"));
@@ -520,21 +569,50 @@ export default function App() {
       if (docSnap.exists()) {
         setConfig(docSnap.data() as StoreConfig);
       }
+      // Delay finishing loading for smooth transition
+      setTimeout(() => setIsAppLoading(false), 2000);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, "config/store", setToastMessage, setShowToast);
+      setIsAppLoading(false);
     });
 
-    const qNotifications = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(10));
+    const qNotifications = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(20));
+    const sessionStartTime = Date.now();
+    const notificationSound = new Audio("https://cdn.pixabay.com/audio/2022/03/15/audio_fe54fe5f5a.mp3");
+    
     const unsubscribeNotifications = onSnapshot(qNotifications, (snapshot) => {
       const nList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as StoreNotification));
-      // Auto-delete logic: Filter out notifications older than 30 days
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      // Auto-filter: Only show notifications from the last 3 days
+      const threeDaysAgo = new Date();
+      threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
       
       const filtered = nList.filter(n => {
         const date = n.createdAt?.toDate ? n.createdAt.toDate() : new Date();
-        return date > thirtyDaysAgo;
+        return date > threeDaysAgo;
       });
+
+      // Handle new notifications (Sound and Browser alert)
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+          const newNotif = change.doc.data() as StoreNotification;
+          const createdAt = newNotif.createdAt?.toMillis ? newNotif.createdAt.toMillis() : Date.now();
+          
+          if (createdAt > sessionStartTime) {
+            // Play sound
+            notificationSound.play().catch(e => console.log("Sound play error:", e));
+            
+            // Browser Push Notification (if permission granted)
+            if ("Notification" in window && Notification.permission === "granted") {
+              new Notification(newNotif.title, {
+                body: newNotif.message,
+                icon: config.appIcon || "https://picsum.photos/seed/store/192/192"
+              });
+            }
+          }
+        }
+      });
+
       setNotifications(filtered);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, "notifications", setToastMessage, setShowToast);
@@ -552,6 +630,53 @@ export default function App() {
       unsubscribeNotifications();
     };
   }, []);
+
+  // Automatic cleanup of old notifications (Admins only)
+  useEffect(() => {
+    if (isAdmin && db) {
+      const cleanupOldNotifications = async () => {
+        try {
+          const threeDaysAgo = new Date();
+          threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+          
+          const q = query(collection(db, "notifications"), where("createdAt", "<", threeDaysAgo));
+          const snapshot = await getDocs(q);
+          
+          if (!snapshot.empty) {
+            console.log(`Cleaning up ${snapshot.size} old notifications...`);
+            const batch = writeBatch(db);
+            snapshot.docs.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+          }
+        } catch (error) {
+          console.error("Cleanup error:", error);
+        }
+      };
+      
+      cleanupOldNotifications();
+    }
+  }, [isAdmin]);
+
+  // Request Notification Permission on load if logged in
+  useEffect(() => {
+    if ((user || phoneUser) && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, [user, phoneUser]);
+
+  // Fetch all customers for admin
+  useEffect(() => {
+    let unsubscribe = () => {};
+    if (isAdmin && db) {
+      const q = query(collection(db, "customers"), orderBy("lastLogin", "desc"));
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        setCustomers(snapshot.docs.map(doc => ({ ...doc.data() } as Customer)));
+      }, (error) => {
+        console.error("Customers fetch error:", error);
+      });
+    }
+    return () => unsubscribe();
+  }, [isAdmin]);
 
   // Fetch customer orders if logged in via phone
   useEffect(() => {
@@ -689,6 +814,12 @@ export default function App() {
       const customerDoc = await getDoc(doc(db, "customers", cleanPhone));
       let existingData = customerDoc.exists() ? customerDoc.data() : null;
 
+      if (existingData?.isBlocked) {
+        setToastMessage("আপনার অ্যাকাউন্টটি ব্লক করা হয়েছে। অনুগ্রহ করে কর্তৃপক্ষের সাথে যোগাযোগ করুন।");
+        setShowToast(true);
+        return;
+      }
+
       const newUser = { 
         phone: cleanPhone, 
         name: nameInput.trim() || (existingData?.name) || "সম্মানিত ক্রেতা",
@@ -739,6 +870,15 @@ export default function App() {
       return;
     }
 
+    if (phoneUser?.phone) {
+      const customerDoc = await getDoc(doc(db, "customers", phoneUser.phone));
+      if (customerDoc.exists() && customerDoc.data()?.isBlocked) {
+        setToastMessage("আপনি অর্ডার করতে পারবেন না। আপনার অ্যাকাউন্ট ব্লক করা হয়েছে।");
+        setShowToast(true);
+        return;
+      }
+    }
+
     if (isPlacingOrder) return;
 
     setIsPlacingOrder(true);
@@ -763,26 +903,51 @@ export default function App() {
       // Create order reference with auto-generated ID
       const orderRef = doc(collection(db, "orders"));
       
-      batch.set(orderRef, {
-        customerName: checkoutInfo.name,
-        customerPhone: checkoutInfo.phone,
-        customerAddress: checkoutInfo.address,
-        items: cart,
-        totalPrice,
+      // Strip images and ensure data is clean - explicitly pick fields to minimize size
+      const itemsToSave = cart.map(item => {
+        return {
+          id: item.id || "unknown",
+          name: item.name || "Unknown Product",
+          price: Number(item.price) || 0,
+          quantity: Number(item.quantity) || 1,
+          unit: item.unit || "unit",
+          category: item.category || "General"
+        };
+      });
+
+      const finalTotalPrice = itemsToSave.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      
+      const orderData = {
+        customerName: checkoutInfo.name || "Guest",
+        customerPhone: checkoutInfo.phone || "00000000000",
+        customerAddress: checkoutInfo.address || "No Address",
+        items: itemsToSave,
+        totalPrice: finalTotalPrice,
         status: "pending",
-        paymentMethod: checkoutInfo.paymentMethod,
+        paymentMethod: checkoutInfo.paymentMethod || "Cash on Delivery",
         location,
         uid: user?.uid || null,
         phoneUser: phoneUser?.phone || null,
         createdAt: serverTimestamp()
-      });
+      };
+      
+      batch.set(orderRef, orderData);
 
       // Update stock for each item
+      // Use a Map to ensure we only update each product once per batch
+      const stockUpdates = new Map<string, number>();
       for (const item of cart) {
-        const productRef = doc(db, "products", item.id);
+        if (item.id) {
+          const current = stockUpdates.get(item.id) || 0;
+          stockUpdates.set(item.id, current + item.quantity);
+        }
+      }
+
+      for (const [productId, quantity] of stockUpdates.entries()) {
+        const productRef = doc(db, "products", productId);
         batch.update(productRef, {
-          stockQuantity: increment(-item.quantity),
-          soldCount: increment(item.quantity)
+          stockQuantity: increment(-quantity),
+          soldCount: increment(quantity)
         });
       }
       
@@ -790,12 +955,11 @@ export default function App() {
 
       setCart([]);
       setIsOrderSuccess(true);
-      setToastMessage("অর্ডার সফল হয়েছে!");
+      setToastMessage(config.orderSuccessMsg || "অর্ডার সফল হয়েছে!");
       setShowToast(true);
-    } catch (error) {
-      console.error("Order error:", error);
-      setToastMessage("অর্ডার করতে সমস্যা হয়েছে। দয়া করে আবার চেষ্টা করুন।");
-      setShowToast(true);
+    } catch (error: any) {
+      console.error("Order placement error:", error);
+      handleFirestoreError(error, OperationType.WRITE, "orders", setToastMessage, setShowToast);
     } finally {
       setIsPlacingOrder(false);
     }
@@ -979,6 +1143,84 @@ export default function App() {
     }
   }, [config.appIcon]);
 
+  const handleBlockCustomer = async (phone: string, isBlocked: boolean) => {
+    try {
+      await updateDoc(doc(db, "customers", phone), { isBlocked });
+      setToastMessage(isBlocked ? "কাস্টমারকে ব্লক করা হয়েছে।" : "কাস্টমারকে আনব্লক করা হয়েছে।");
+      setShowToast(true);
+    } catch (error) {
+       console.error("Block error:", error);
+       setToastMessage("কাস্টমার ব্লক করতে সমস্যা হয়েছে।");
+       setShowToast(true);
+    }
+  };
+
+  const handlePlacePromoOrder = async () => {
+    if (!phoneUser) {
+      setToastMessage("অর্ডার করতে প্রথমে লগইন করুন।");
+      setShowToast(true);
+      setShowPhoneLogin(true);
+      return;
+    }
+
+    const amount = Number(promoAmount) || config.promoServiceDefaultAmount || 0;
+    if (amount <= 0) {
+      setToastMessage("সঠিক অ্যামাউন্ট দিন");
+      setShowToast(true);
+      return;
+    }
+
+    setIsPlacingPromoOrder(true);
+    
+    // Automatically try to get location if not already fetched
+    const location = await getUserLocation();
+
+    try {
+      // Check block status
+      const customerDoc = await getDoc(doc(db, "customers", phoneUser.phone));
+      if (customerDoc.exists() && customerDoc.data()?.isBlocked) {
+         setToastMessage("আপনি অর্ডার করতে পারবেন না। আপনার অ্যাকাউন্ট ব্লক করা হয়েছে।");
+         setShowToast(true);
+         setIsPlacingPromoOrder(false);
+         return;
+      }
+
+      const orderData = {
+        customerName: checkoutInfo.name || phoneUser.name,
+        customerPhone: checkoutInfo.phone || phoneUser.phone,
+        customerAddress: checkoutInfo.address || "ঠিকানা দেওয়া হয়নি",
+        items: [{
+          id: "PROMO_SERVICE",
+          name: config.promoServiceTitle || "স্পেশাল সার্ভিস",
+          price: amount,
+          quantity: 1,
+          category: "Service",
+          unit: "টাকা",
+          image: config.promoServiceImage || "https://picsum.photos/seed/service/200/200"
+        }],
+        totalPrice: amount,
+        status: "pending",
+        paymentMethod: "Cash on Delivery",
+        location,
+        createdAt: serverTimestamp(),
+        note: `সার্ভিস অর্ডার: ${amount} টাকা`,
+        uid: user?.uid || null,
+        phoneUser: phoneUser?.phone || null
+      };
+
+      await addDoc(collection(db, "orders"), orderData);
+      
+      setToastMessage(config.orderSuccessMsg || "আপনার অর্ডারটি সফল হয়েছে!");
+      setShowToast(true);
+      setShowPromoModal(false);
+      setPromoAmount("");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, "orders/promo", setToastMessage, setShowToast);
+    } finally {
+      setIsPlacingPromoOrder(false);
+    }
+  };
+
   const handleUpdateConfig = async () => {
     try {
       await setDoc(doc(db, "config", "store"), config);
@@ -1087,7 +1329,7 @@ export default function App() {
     });
   };
 
-  const handleImageUpload = async (e: ChangeEvent<HTMLInputElement>, type: 'product' | 'logo' | 'hero' | 'appIcon' = 'product') => {
+  const handleImageUpload = async (e: ChangeEvent<HTMLInputElement>, type: 'product' | 'logo' | 'hero' | 'appIcon' | 'promoService' = 'product') => {
     const file = e.target.files?.[0];
     if (file) {
       try {
@@ -1104,6 +1346,8 @@ export default function App() {
           setConfig({ ...config, heroImage: base64String });
         } else if (type === 'appIcon') {
           setConfig({ ...config, appIcon: base64String });
+        } else if (type === 'promoService') {
+          setConfig({ ...config, promoServiceImage: base64String });
         }
       } catch (error) {
         console.error("Image compression error:", error);
@@ -1219,6 +1463,47 @@ export default function App() {
       setShowToast(true);
     }
   };
+
+  if (isAppLoading) {
+    return (
+      <div className="fixed inset-0 z-[999] bg-white flex flex-col items-center justify-center p-6 text-center">
+        <motion.div
+          animate={{ 
+            rotate: 360,
+            scale: [1, 1.1, 1] 
+          }}
+          transition={{ 
+            rotate: { duration: 2, repeat: Infinity, ease: "linear" },
+            scale: { duration: 1.5, repeat: Infinity }
+          }}
+          className="mb-8 p-4 bg-green-50 rounded-full text-green-600 shadow-xl shadow-green-100"
+        >
+          <Store size={64} />
+        </motion.div>
+        
+        <div className="space-y-4 max-w-sm">
+          <h2 className="text-2xl font-black text-gray-900 leading-tight">
+            ওয়াসিম স্টোর
+          </h2>
+          <div className="flex items-center justify-center gap-2">
+            <div className="h-2 w-2 rounded-full bg-green-600 animate-bounce" />
+            <div className="h-2 w-2 rounded-full bg-green-600 animate-bounce [animation-delay:-0.15s]" />
+            <div className="h-2 w-2 rounded-full bg-green-600 animate-bounce [animation-delay:-0.3s]" />
+          </div>
+          <p className="text-lg font-bold text-green-700 bg-green-50 px-6 py-3 rounded-2xl border border-green-100 animate-pulse">
+            অ্যাপসটি লোডিং হচ্ছে একটু অপেক্ষা করুন
+          </p>
+          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
+            আমরা আপনার অভিজ্ঞতার জন্য সফটওয়্যারটি অটোমেটিক লোডিং করছি
+          </p>
+        </div>
+        
+        <div className="absolute bottom-12 left-0 right-0">
+          <p className="text-[10px] text-gray-300 font-medium">Wasim Store Delivery Platform</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#fdfcf8] text-[#2d2d2d] font-sans overflow-x-hidden">
@@ -1749,6 +2034,55 @@ export default function App() {
 
             {/* Reviews Section for Customers */}
             {/* Review section removed as per user request */}
+
+            {/* Promo Service Section */}
+            {config.showPromoService && (
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                className="mb-12 overflow-hidden bg-white rounded-[32px] border border-gray-100 shadow-xl shadow-green-900/5 mt-24"
+              >
+                {config.promoServiceImage && (
+                  <div className="h-48 w-full overflow-hidden">
+                    <img 
+                      src={config.promoServiceImage} 
+                      alt="Promo" 
+                      className="w-full h-full object-cover transition-transform hover:scale-105 duration-700" 
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                )}
+                <div className="p-8">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                    <div className="space-y-2 flex-1">
+                      <h3 className="text-2xl font-black text-gray-900 leading-tight">
+                        {config.promoServiceTitle || "আমাদের বিশেষ সেবা"}
+                      </h3>
+                      <p className="text-sm text-gray-600 leading-relaxed max-w-xl">
+                        {config.promoServiceDescription || "আমাদের এই সেবাটি উপভোগ করতে নিচের বাটনে ক্লিক করুন।"}
+                      </p>
+                    </div>
+                    
+                    <div className="flex items-center gap-4 bg-gray-50 p-3 rounded-2xl border border-gray-100">
+                      <div className="text-right">
+                        <span className="text-[10px] text-gray-400 block uppercase font-bold tracking-wider">অ্যামাউন্ট</span>
+                        <span className="text-xl font-black text-green-700">৳{config.promoServiceDefaultAmount || 0}</span>
+                      </div>
+                      <Button 
+                        onClick={() => {
+                          setPromoAmount(String(config.promoServiceDefaultAmount || ""));
+                          setShowPromoModal(true);
+                        }}
+                        className="bg-green-700 hover:bg-green-800 h-10 px-6 rounded-xl font-bold shadow-md shadow-green-100 transition-all hover:-translate-y-0.5 text-white text-xs whitespace-nowrap"
+                      >
+                        {config.promoServiceButtonText || "অর্ডার করুন"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
           </>
         )}
 
@@ -1862,12 +2196,20 @@ export default function App() {
                                 <p className="text-sm text-muted-foreground">মোট মূল্য: <span className="text-green-700 font-bold">৳{order.totalPrice}</span></p>
                               </div>
                               <div className="flex flex-wrap gap-2">
-                                {order.items.map((item, idx) => (
-                                  <div key={idx} className="flex items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100">
-                                    <img src={item.image} className="h-8 w-8 object-cover rounded" alt="" />
-                                    <span className="text-xs font-medium">{item.name} x {item.quantity}</span>
-                                  </div>
-                                ))}
+                                {order.items.map((item, idx) => {
+                                  const productInfo = products.find(p => p.id === item.id);
+                                  return (
+                                    <div key={idx} className="flex items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100">
+                                      <img 
+                                        src={item.image || productInfo?.image || "https://picsum.photos/seed/product/100/100"} 
+                                        className="h-8 w-8 object-cover rounded" 
+                                        alt="" 
+                                        referrerPolicy="no-referrer"
+                                      />
+                                      <span className="text-xs font-medium">{item.name} x {item.quantity}</span>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
                           </CardContent>
@@ -2004,7 +2346,159 @@ export default function App() {
                   <Button variant="outline" onClick={handleLogout}>লগআউট</Button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                {/* Admin Tabs */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-hide">
+                  {[
+                    { id: 'orders', label: 'অর্ডারসমূহ', icon: ListOrdered },
+                    { id: 'products', label: 'পণ্যসমূহ', icon: Package },
+                    { id: 'users', label: 'কাস্টমার', icon: UserIcon },
+                    { id: 'settings', label: 'সেটিংস', icon: Settings }
+                  ].map(tab => (
+                    <Button
+                      key={tab.id}
+                      variant={adminSubTab === tab.id ? "default" : "outline"}
+                      onClick={() => setAdminSubTab(tab.id as any)}
+                      className={`rounded-xl flex items-center gap-2 h-11 shrink-0 ${
+                        adminSubTab === tab.id ? "bg-green-700 hover:bg-green-800 shadow-md" : "border-green-100 text-green-700 hover:bg-green-50"
+                      }`}
+                    >
+                      <tab.icon size={18} />
+                      <span className="text-sm font-bold">{tab.label}</span>
+                    </Button>
+                  ))}
+                </div>
+
+                {adminSubTab === "orders" && (
+                  <div className="space-y-6">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-2">
+                      <h3 className="text-xl font-bold">অর্ডার ম্যানেজমেন্ট</h3>
+                      <div className="flex bg-gray-100 p-1 rounded-xl">
+                        <button 
+                          onClick={() => setOrderFilter("pending")}
+                          className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${orderFilter === 'pending' ? 'bg-white shadow-sm text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                          পেন্ডিং ({orders.filter(o => o.status !== 'delivered').length})
+                        </button>
+                        <button 
+                          onClick={() => setOrderFilter("delivered")}
+                          className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${orderFilter === 'delivered' ? 'bg-white shadow-sm text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                          ডেলিভারি সম্পন্ন ({orders.filter(o => o.status === 'delivered').length})
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-2">
+                      <Card className="bg-green-50 border-green-100">
+                        <CardContent className="p-4 flex items-center gap-4">
+                          <div className="h-10 w-10 rounded-full bg-green-600 flex items-center justify-center text-white">
+                            <ShoppingBag size={20} />
+                          </div>
+                          <div>
+                            <p className="text-[10px] uppercase font-bold text-green-700">মোট বিক্রি</p>
+                            <p className="text-xl font-black text-green-900">৳{salesSummary.total}</p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card className="bg-blue-50 border-blue-100">
+                        <CardContent className="p-4 flex items-center gap-4">
+                          <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center text-white">
+                            <Phone size={20} />
+                          </div>
+                          <div>
+                            <p className="text-[10px] uppercase font-bold text-blue-700">অনলাইন পেমেন্ট</p>
+                            <p className="text-xl font-black text-blue-900">৳{salesSummary.online}</p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                      <Card className="bg-amber-50 border-amber-100">
+                        <CardContent className="p-4 flex items-center gap-4">
+                          <div className="h-10 w-10 rounded-full bg-amber-600 flex items-center justify-center text-white">
+                            <Home size={20} />
+                          </div>
+                          <div>
+                            <p className="text-[10px] uppercase font-bold text-amber-700">ক্যাশ অন ডেলিভারি</p>
+                            <p className="text-xl font-black text-amber-900">৳{salesSummary.cash}</p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    <div className="grid gap-4">
+                      {orders
+                        .filter(order => orderFilter === 'delivered' ? order.status === 'delivered' : order.status !== 'delivered')
+                        .map(order => (
+                        <Card key={order.id} className="overflow-hidden">
+                          <div className={`h-2 w-full ${
+                            order.status === 'pending' ? 'bg-yellow-400' : 
+                            order.status === 'confirmed' ? 'bg-blue-400' : 
+                            order.status === 'shipped' ? 'bg-indigo-400' :
+                            order.status === 'delivered' ? 'bg-green-400' : 'bg-red-400'
+                          }`} />
+                          <CardContent className="p-6">
+                            <div className="flex flex-col md:flex-row justify-between gap-6">
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="outline">{statusLabels.find(s => s.status === order.status)?.label || order.status.toUpperCase()}</Badge>
+                                  <span className="text-xs text-muted-foreground">{order.createdAt?.toDate ? order.createdAt.toDate().toLocaleString('bn-BD') : "অজানা তারিখ"}</span>
+                                </div>
+                                <h4 className="font-bold text-lg">{order.customerName}</h4>
+                                <p className="text-sm">ফোন: {order.customerPhone}</p>
+                                <p className="text-sm">ঠিকানা: {order.customerAddress}</p>
+                                <p className="text-sm font-bold">পেমেন্ট: {order.paymentMethod}</p>
+                                {order.location && (
+                                  <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    className="mt-2 border-green-200 text-green-700 font-bold"
+                                    onClick={() => window.open(`https://www.google.com/maps?q=${order.location?.lat},${order.location?.lng}`, '_blank')}
+                                  >
+                                    <MapPin size={14} className="mr-2" />
+                                    লোকেশন দেখুন
+                                  </Button>
+                                )}
+                              </div>
+                              <div className="flex-1">
+                                <h5 className="font-bold text-sm mb-2">পণ্যসমূহ:</h5>
+                                <ul className="text-sm space-y-1">
+                                  {order.items.map((item, idx) => (
+                                    <li key={idx} className="flex justify-between items-center bg-gray-50 p-2 rounded-lg mb-1">
+                                      <span>{item.name} x {item.quantity}</span>
+                                      <span className="font-bold">৳{item.price * item.quantity}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                                <div className="mt-4 flex justify-between items-center p-3 bg-green-50 rounded-xl">
+                                  <span className="font-bold text-green-800">সর্বমোট:</span>
+                                  <span className="font-black text-lg text-green-700">৳{order.totalPrice}</span>
+                                </div>
+                              </div>
+                              <div className="flex flex-col gap-2 min-w-[150px]">
+                                {order.status !== 'delivered' && (
+                                  <>
+                                    <Button size="sm" variant="outline" className="h-10 font-bold" onClick={() => handleUpdateOrderStatus(order.id, 'confirmed')}>অর্ডার কনফার্ম</Button>
+                                    <Button size="sm" variant="outline" className="h-10 font-bold bg-blue-50 text-blue-700 border-blue-100" onClick={() => handleUpdateOrderStatus(order.id, 'shipped')}>ডেলিভারি পথিমধ্যে</Button>
+                                    <Button size="sm" variant="outline" className="h-10 font-bold bg-green-50 text-green-700 border-green-100" onClick={() => handleUpdateOrderStatus(order.id, 'delivered')}>ডেলিভারি সম্পন্ন</Button>
+                                    <Button size="sm" variant="outline" className="h-10 font-bold text-red-500 border-red-100" onClick={() => handleUpdateOrderStatus(order.id, 'cancelled')}>অর্ডার বাতিল</Button>
+                                  </>
+                                )}
+                                {order.status === 'delivered' && (
+                                  <Button size="sm" variant="destructive" className="h-10 font-bold" onClick={() => handleDeleteOrder(order.id)}>
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    ডিলিট করুন
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {adminSubTab === "products" && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center justify-between">
@@ -2165,6 +2659,47 @@ export default function App() {
                   </Card>
 
                   <Card>
+                    <CardHeader><CardTitle>পণ্য তালিকা (এডিট বা ডিলিট করুন)</CardTitle></CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {products.map(p => (
+                          <div key={p.id} className="flex items-center justify-between p-3 border rounded-xl bg-gray-50/50">
+                            <div className="flex items-center gap-3">
+                              <img src={p.image} className="h-10 w-10 rounded object-cover" alt="" />
+                              <div>
+                                <p className="font-bold text-sm">{p.name}</p>
+                                <div className="flex gap-2 items-center">
+                                  <p className="text-xs text-muted-foreground">৳{p.price}</p>
+                                  <Badge variant="outline" className="text-[10px] h-4 px-1 bg-blue-50 text-blue-700 border-blue-100">
+                                    স্টক: {p.stockQuantity || 0}
+                                  </Badge>
+                                  <Badge variant="outline" className="text-[10px] h-4 px-1 bg-green-50 text-green-700 border-green-100">
+                                    বিক্রি: {p.soldCount || 0}
+                                  </Badge>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex gap-1">
+                              <Button variant="outline" size="icon" className="h-8 w-8 text-blue-600" onClick={() => {
+                                setEditingProduct(p);
+                                window.scrollTo({ top: 0, behavior: 'smooth' });
+                              }}>
+                                <Settings size={14} />
+                              </Button>
+                              <Button variant="outline" size="icon" className="h-8 w-8 text-red-500" onClick={() => handleDeleteProduct(p.id)}>
+                                <Trash2 size={14} />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                  </div>
+                )}
+
+                {adminSubTab === "users" && (
+                  <Card>
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <Phone size={18} className="text-green-600" />
@@ -2172,35 +2707,58 @@ export default function App() {
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <ScrollArea className="h-[400px]">
-                        <div className="space-y-3">
+                      <ScrollArea className="h-[600px]">
+                        <div className="space-y-4">
                           {customers.map(customer => (
-                            <div key={customer.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border group hover:border-green-300 transition-colors">
-                              <div className="flex items-center gap-3">
-                                <div className="h-12 w-12 rounded-full overflow-hidden bg-gray-200 border-2 border-white shadow-sm">
+                            <div key={customer.id} className={`flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-gray-50 rounded-2xl border transition-all ${customer.isBlocked ? 'border-red-200 bg-red-50/30 opacity-75' : 'hover:border-green-300'}`}>
+                              <div className="flex items-center gap-4 mb-4 sm:mb-0">
+                                <div className="h-14 w-14 rounded-full overflow-hidden bg-gray-200 border-2 border-white shadow-md relative">
                                   {customer.image ? (
                                     <img src={customer.image} alt="" className="h-full w-full object-cover" />
                                   ) : (
-                                    <UserIcon size={24} className="text-gray-400 m-auto mt-2" />
+                                    <div className="flex h-full w-full items-center justify-center bg-green-50 text-green-600">
+                                      <UserIcon size={28} />
+                                    </div>
+                                  )}
+                                  {customer.isBlocked && (
+                                    <div className="absolute inset-0 bg-red-500/20 flex items-center justify-center">
+                                      <ShieldAlert size={20} className="text-red-600" />
+                                    </div>
                                   )}
                                 </div>
                                 <div>
-                                  <p className="font-bold text-sm">{customer.name}</p>
-                                  <p className="text-xs text-muted-foreground">{customer.phone}</p>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <div className="text-right hidden sm:block">
-                                  <p className="text-[10px] text-gray-400">শেষ লগইন:</p>
-                                  <p className="text-[10px] font-medium">
-                                    {customer.lastLogin?.toDate ? customer.lastLogin.toDate().toLocaleString('bn-BD') : "অজানা"}
+                                  <p className="font-bold text-base flex items-center gap-2">
+                                    {customer.name}
+                                    {customer.isBlocked && <Badge variant="destructive" className="text-[9px] h-4 px-1.5 uppercase tracking-tighter">অবদমিত (Blocked)</Badge>}
+                                  </p>
+                                  <p className="text-sm text-muted-foreground font-medium">{customer.phone}</p>
+                                  <p className="text-[10px] text-gray-400 italic mt-0.5">
+                                    শেষ লগইন: {customer.lastLogin?.toDate ? customer.lastLogin.toDate().toLocaleString('bn-BD') : "অজানা"}
                                   </p>
                                 </div>
+                              </div>
+                              <div className="flex items-center gap-2 w-full sm:w-auto">
+                                <Button 
+                                  variant="outline" 
+                                  size="sm" 
+                                  className={`flex-1 sm:flex-none h-10 px-4 rounded-xl font-bold transition-all ${
+                                    customer.isBlocked 
+                                    ? "bg-green-600 text-white hover:bg-green-700 border-none" 
+                                    : "bg-red-50 text-red-600 border-red-100 hover:bg-red-100 hover:text-red-700"
+                                  }`}
+                                  onClick={() => handleBlockCustomer(customer.phone, !customer.isBlocked)}
+                                >
+                                  {customer.isBlocked ? (
+                                    <><ShieldCheck size={16} className="mr-2" /> আনব্লক করুন</>
+                                  ) : (
+                                    <><ShieldAlert size={16} className="mr-2" /> ব্লক করুন</>
+                                  )}
+                                </Button>
                                 {customer.image && (
                                   <Button 
                                     variant="outline" 
                                     size="icon" 
-                                    className="h-8 w-8 rounded-full text-green-600 border-green-200 hover:bg-green-50"
+                                    className="h-10 w-10 rounded-xl text-green-600 border-green-200 hover:bg-green-100 transition-colors"
                                     onClick={() => {
                                       const link = document.createElement('a');
                                       link.href = customer.image;
@@ -2211,21 +2769,113 @@ export default function App() {
                                     }}
                                     title="ছবি ডাউনলোড করুন"
                                   >
-                                    <Download size={14} />
+                                    <Download size={18} />
                                   </Button>
                                 )}
                               </div>
                             </div>
                           ))}
                           {customers.length === 0 && (
-                            <p className="text-xs text-center text-muted-foreground py-4">কোনো কাস্টমার নেই</p>
+                            <div className="flex flex-col items-center justify-center py-12 text-center bg-gray-50 rounded-2xl border border-dashed">
+                              <UserIcon size={48} className="text-gray-300 mb-4" />
+                              <p className="text-sm font-medium text-gray-500">এখনো কোনো কাস্টমার রেজিস্টার করেনি</p>
+                            </div>
                           )}
                         </div>
                       </ScrollArea>
                     </CardContent>
                   </Card>
+                )}
 
-                  <Card>
+                {adminSubTab === "settings" && (
+                  <div className="space-y-8">
+                    <Card className="border-none shadow-xl bg-gradient-to-br from-white to-green-50/30">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="flex items-center gap-2 text-green-800">
+                          <Zap size={20} className="text-green-600" />
+                          প্রোমোশনাল সার্ভিস সেটিংস
+                        </CardTitle>
+                        <p className="text-xs text-green-600/70">কাস্টমারদের জন্য বিশেষ সেবা বা অফার সেট করুন যা তারা সরাসরি অর্ডার করতে পারবে।</p>
+                      </CardHeader>
+                      <CardContent className="space-y-6 pt-4">
+                        <div className="flex items-center justify-between p-4 bg-white rounded-2xl border border-green-100 shadow-sm">
+                          <div className="space-y-0.5">
+                            <label className="text-sm font-bold text-gray-800">প্রোমো সার্ভিস চালু করুন</label>
+                            <p className="text-[10px] text-muted-foreground italic">এটি অন করলে কাস্টমার অ্যাপের নিচে প্রোমো সেকশন দেখাবে।</p>
+                          </div>
+                          <div 
+                            onClick={() => setConfig({...config, showPromoService: !config.showPromoService})}
+                            className={`w-14 h-8 rounded-full p-1 cursor-pointer transition-colors duration-200 flex items-center ${config.showPromoService ? 'bg-green-600' : 'bg-gray-300'}`}
+                          >
+                            <motion.div 
+                              animate={{ x: config.showPromoService ? 24 : 0 }}
+                              className="w-6 h-6 bg-white rounded-full shadow-md"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div className="space-y-2">
+                            <label className="text-xs font-black uppercase tracking-wider text-green-700">প্রোমো টাইটেল</label>
+                            <Input 
+                              placeholder="যেমন: ১টি স্পেশাল অফার!" 
+                              className="h-12 rounded-xl focus:ring-green-500"
+                              value={config.promoServiceTitle} 
+                              onChange={e => setConfig({...config, promoServiceTitle: e.target.value})} 
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-black uppercase tracking-wider text-green-700">ডিফল্ট অর্ডার এমাউন্ট (৳)</label>
+                            <Input 
+                              type="number"
+                              placeholder="যেমন: ৫০০০" 
+                              className="h-12 rounded-xl focus:ring-green-500"
+                              value={config.promoServiceDefaultAmount} 
+                              onChange={e => setConfig({...config, promoServiceDefaultAmount: Number(e.target.value)})} 
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-xs font-black uppercase tracking-wider text-green-700">প্রোমো ডেসক্রিপশন</label>
+                          <textarea 
+                            rows={3}
+                            placeholder="অফারটি সম্পর্কে বিস্তারিত লিখুন..." 
+                            className="w-full p-4 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"
+                            value={config.promoServiceDescription} 
+                            onChange={e => setConfig({...config, promoServiceDescription: e.target.value})} 
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div className="space-y-2">
+                            <label className="text-xs font-black uppercase tracking-wider text-green-700">বাটন টেক্সট</label>
+                            <Input 
+                              placeholder="যেমন: এখনই অর্ডার করুন" 
+                              className="h-12 rounded-xl focus:ring-green-500"
+                              value={config.promoServiceButtonText} 
+                              onChange={e => setConfig({...config, promoServiceButtonText: e.target.value})} 
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-black uppercase tracking-wider text-green-700">প্রোমো ছবি (ব্যানার)</label>
+                            <div className="flex items-center gap-4">
+                              <Input 
+                                type="file" 
+                                accept="image/*" 
+                                className="h-12 rounded-xl border-dashed border-2 pt-2.5 cursor-pointer"
+                                onChange={(e) => handleImageUpload(e, 'promoService')} 
+                              />
+                              {config.promoServiceImage && (
+                                <img src={config.promoServiceImage} className="h-12 w-12 rounded-xl object-cover border shadow-sm" alt="Promo" />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
                     <CardHeader><CardTitle>দোকান সেটিংস ও লিঙ্ক</CardTitle></CardHeader>
                     <CardContent className="space-y-4">
                       <div className="p-4 bg-green-50 rounded-2xl border border-green-100 mb-4">
@@ -2339,13 +2989,21 @@ export default function App() {
                         <Input placeholder="বিকাশ নাম্বার" value={config.bkashNumber} onChange={e => setConfig({...config, bkashNumber: e.target.value})} />
                         <Input placeholder="নগদ নাম্বার" value={config.nagadNumber} onChange={e => setConfig({...config, nagadNumber: e.target.value})} />
                       </div>
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 gap-4">
                         <Input placeholder="হোয়াটসঅ্যাপ নাম্বার" value={config.whatsappNumber} onChange={e => setConfig({...config, whatsappNumber: e.target.value})} />
-                        <Input placeholder="ইমু নাম্বার" value={config.imoNumber} onChange={e => setConfig({...config, imoNumber: e.target.value})} />
                       </div>
                       <Input placeholder="দোকানের ঠিকানা" value={config.storeAddress} onChange={e => setConfig({...config, storeAddress: e.target.value})} />
                       <Input placeholder="ফোন নাম্বার" value={config.storePhone} onChange={e => setConfig({...config, storePhone: e.target.value})} />
-                      <Input placeholder="দোকানের ইমেইল" value={config.storeEmail} onChange={e => setConfig({...config, storeEmail: e.target.value})} />
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold uppercase text-muted-foreground">অর্ডার সাকসেস মেসেজ</label>
+                        <Input 
+                          placeholder="অর্ডার সফল হলে কাস্টমার যে মেসেজটি দেখবে" 
+                          value={config.orderSuccessMsg} 
+                          onChange={e => setConfig({...config, orderSuccessMsg: e.target.value})} 
+                          className="bg-white"
+                        />
+                        <p className="text-[10px] text-blue-600 font-medium italic">অর্ডার সফল হওয়ার পর কাস্টমার এই মেসেজটি পপ-আপ আকারে দেখতে পাবে।</p>
+                      </div>
                       <div className="grid grid-cols-2 gap-4">
                         <Input placeholder="প্রোমো বাটন টাইটেল" value={config.promoButtonTitle} onChange={e => setConfig({...config, promoButtonTitle: e.target.value})} />
                         <Input placeholder="প্রোমো বাটন লিঙ্ক" value={config.promoButtonLink} onChange={e => setConfig({...config, promoButtonLink: e.target.value})} />
@@ -2354,48 +3012,11 @@ export default function App() {
                     </CardContent>
                   </Card>
                 </div>
-
-                <Card>
-                  <CardHeader><CardTitle>পণ্য তালিকা (এডিট বা ডিলিট করুন)</CardTitle></CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {products.map(p => (
-                        <div key={p.id} className="flex items-center justify-between p-3 border rounded-xl bg-gray-50/50">
-                          <div className="flex items-center gap-3">
-                            <img src={p.image} className="h-10 w-10 rounded object-cover" alt="" />
-                            <div>
-                              <p className="font-bold text-sm">{p.name}</p>
-                              <div className="flex gap-2 items-center">
-                                <p className="text-xs text-muted-foreground">৳{p.price}</p>
-                                <Badge variant="outline" className="text-[10px] h-4 px-1 bg-blue-50 text-blue-700 border-blue-100">
-                                  স্টক: {p.stockQuantity || 0}
-                                </Badge>
-                                <Badge variant="outline" className="text-[10px] h-4 px-1 bg-green-50 text-green-700 border-green-100">
-                                  বিক্রি: {p.soldCount || 0}
-                                </Badge>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex gap-1">
-                            <Button variant="outline" size="icon" className="h-8 w-8 text-blue-600" onClick={() => {
-                              setEditingProduct(p);
-                              window.scrollTo({ top: 0, behavior: 'smooth' });
-                            }}>
-                              <Settings size={14} />
-                            </Button>
-                            <Button variant="outline" size="icon" className="h-8 w-8 text-red-500" onClick={() => handleDeleteProduct(p.id)}>
-                              <Trash2 size={14} />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </>
-            )}
-          </div>
+              )}
+          </>
         )}
+      </div>
+    )}
 
         {activeTab === "orders" && (
           <div className="max-w-5xl mx-auto space-y-6">
@@ -2410,11 +3031,12 @@ export default function App() {
                 হোমপেজে ফিরে যান
               </Button>
             </div>
+            
             {!user ? (
               <Card className="p-12 text-center">
-                <h3 className="text-2xl font-bold mb-4">অর্ডার ম্যানেজমেন্ট</h3>
+                <h3 className="text-2xl font-bold mb-4">অ্যাডমিন প্রবেশ</h3>
                 <Button onClick={loginWithGoogle} className="bg-green-600">
-                  লগইন করুন
+                  Google দিয়ে লগইন করুন
                 </Button>
               </Card>
             ) : !isAdmin ? (
@@ -2423,143 +3045,20 @@ export default function App() {
                 <p className="text-sm text-gray-500 mb-4">লগইন ইমেইল: {user.email}</p>
                 <Button variant="link" onClick={handleLogout}>লগআউট</Button>
               </Card>
-            ) : !isAdminUnlocked && config.adminPassword ? (
-              <Card className="mx-auto max-w-md p-8">
-                <CardHeader className="p-0 mb-4"><CardTitle>পাসওয়ার্ড দিন</CardTitle></CardHeader>
-                <CardContent className="p-0 space-y-4">
-                  <p className="text-sm text-muted-foreground">অর্ডার লিস্ট দেখার জন্য পাসওয়ার্ড দিন।</p>
-                  <Input 
-                    type="password" 
-                    placeholder="পাসওয়ার্ড" 
-                    value={passwordInput} 
-                    onChange={e => setPasswordInput(e.target.value)} 
-                    onKeyDown={e => e.key === 'Enter' && handleAdminUnlock()}
-                  />
-                  <Button onClick={handleAdminUnlock} className="w-full bg-green-600">প্রবেশ করুন</Button>
-                </CardContent>
-              </Card>
             ) : (
-              <ScrollArea className="h-[calc(100vh-200px)]">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-                  <h3 className="text-2xl font-bold">অর্ডার ম্যানেজমেন্ট</h3>
-                  <div className="flex bg-gray-100 p-1 rounded-xl">
-                    <button 
-                      onClick={() => setOrderFilter("pending")}
-                      className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${orderFilter === 'pending' ? 'bg-white shadow-sm text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                      পেন্ডিং অর্ডার ({orders.filter(o => o.status !== 'delivered').length})
-                    </button>
-                    <button 
-                      onClick={() => setOrderFilter("delivered")}
-                      className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${orderFilter === 'delivered' ? 'bg-white shadow-sm text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
-                    >
-                      ডেলিভারি সম্পন্ন ({orders.filter(o => o.status === 'delivered').length})
-                    </button>
-                  </div>
-                </div>
-
-                {/* Sales Summary Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-                  <Card className="bg-green-50 border-green-100">
-                    <CardContent className="p-4 flex items-center gap-4">
-                      <div className="h-10 w-10 rounded-full bg-green-600 flex items-center justify-center text-white">
-                        <ShoppingBag size={20} />
-                      </div>
-                      <div>
-                        <p className="text-[10px] uppercase font-bold text-green-700">মোট বিক্রি</p>
-                        <p className="text-xl font-black text-green-900">৳{salesSummary.total}</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  <Card className="bg-blue-50 border-blue-100">
-                    <CardContent className="p-4 flex items-center gap-4">
-                      <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center text-white">
-                        <Phone size={20} />
-                      </div>
-                      <div>
-                        <p className="text-[10px] uppercase font-bold text-blue-700">অনলাইন পেমেন্ট</p>
-                        <p className="text-xl font-black text-blue-900">৳{salesSummary.online}</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  <Card className="bg-amber-50 border-amber-100">
-                    <CardContent className="p-4 flex items-center gap-4">
-                      <div className="h-10 w-10 rounded-full bg-amber-600 flex items-center justify-center text-white">
-                        <Home size={20} />
-                      </div>
-                      <div>
-                        <p className="text-[10px] uppercase font-bold text-amber-700">ক্যাশ অন ডেলিভারি</p>
-                        <p className="text-xl font-black text-amber-900">৳{salesSummary.cash}</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-
-                <div className="grid gap-4 pr-4">
-                  {orders
-                    .filter(order => orderFilter === 'delivered' ? order.status === 'delivered' : order.status !== 'delivered')
-                    .map(order => (
-                    <Card key={order.id} className="overflow-hidden">
-                      <div className={`h-2 w-full ${
-                        order.status === 'pending' ? 'bg-yellow-400' : 
-                        order.status === 'confirmed' ? 'bg-blue-400' : 
-                        order.status === 'shipped' ? 'bg-indigo-400' :
-                        order.status === 'delivered' ? 'bg-green-400' : 'bg-red-400'
-                      }`} />
-                      <CardContent className="p-6">
-                        <div className="flex flex-col md:flex-row justify-between gap-6">
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline">{statusLabels.find(s => s.status === order.status)?.label || order.status.toUpperCase()}</Badge>
-                              <span className="text-xs text-muted-foreground">{order.createdAt?.toDate().toLocaleString()}</span>
-                            </div>
-                            <h4 className="font-bold text-lg">{order.customerName}</h4>
-                            <p className="text-sm">ফোন: {order.customerPhone}</p>
-                            <p className="text-sm">ঠিকানা: {order.customerAddress}</p>
-                            <p className="text-sm font-bold">পেমেন্ট: {order.paymentMethod}</p>
-                            {order.location && (
-                              <Button 
-                                variant="outline" 
-                                size="sm" 
-                                className="mt-2 border-green-200 text-green-700 font-bold"
-                                onClick={() => window.open(`https://www.google.com/maps?q=${order.location?.lat},${order.location?.lng}`, '_blank')}
-                              >
-                                <MapPin size={14} className="mr-2" />
-                                লোকেশন দেখুন
-                              </Button>
-                            )}
-                          </div>
-                          <div className="flex-1">
-                            <h5 className="font-bold text-sm mb-2">পণ্যসমূহ:</h5>
-                            <ul className="text-sm space-y-1">
-                              {order.items.map((item, idx) => (
-                                <li key={idx}>{item.name} x {item.quantity} - ৳{item.price * item.quantity}</li>
-                              ))}
-                            </ul>
-                            <p className="mt-4 font-bold text-green-700">মোট: ৳{order.totalPrice}</p>
-                          </div>
-                          <div className="flex flex-col gap-2">
-                            {order.status !== 'delivered' && (
-                              <>
-                                <Button size="sm" variant="outline" onClick={() => handleUpdateOrderStatus(order.id, 'confirmed')}>Confirm</Button>
-                                <Button size="sm" variant="outline" className="bg-blue-50 text-blue-700" onClick={() => handleUpdateOrderStatus(order.id, 'shipped')}>Ship (On the way)</Button>
-                                <Button size="sm" variant="outline" className="bg-green-50 text-green-700" onClick={() => handleUpdateOrderStatus(order.id, 'delivered')}>Deliver</Button>
-                                <Button size="sm" variant="outline" className="text-red-500" onClick={() => handleUpdateOrderStatus(order.id, 'cancelled')}>Cancel</Button>
-                              </>
-                            )}
-                            {order.status === 'delivered' && (
-                              <Button size="sm" variant="destructive" onClick={() => handleDeleteOrder(order.id)}>
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                ডিলিট করুন
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </ScrollArea>
+              <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-green-200">
+                <ListOrdered size={48} className="text-green-200 mx-auto mb-4" />
+                <h3 className="text-xl font-bold text-green-800 mb-4">অর্ডার ম্যানেজমেন্ট এখন অ্যাডমিন প্যানেলে</h3>
+                <Button 
+                  onClick={() => {
+                    setAdminSubTab('orders');
+                    setActiveTab("admin");
+                  }}
+                  className="bg-green-700 hover:bg-green-800"
+                >
+                  অ্যাডমিন প্যানেলে যান
+                </Button>
+              </div>
             )}
           </div>
         )}
@@ -2576,22 +3075,31 @@ export default function App() {
             <span className="text-[10px] font-bold">হোম</span>
           </button>
           <button 
-            onClick={() => setActiveTab("info")}
-            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === "info" ? "text-green-700" : "text-gray-400"}`}
-          >
-            <PackageSearch size={22} />
-            <span className="text-[10px] font-bold">ট্র্যাকিং</span>
-          </button>
-          <button 
-            onClick={() => setActiveTab("orders")}
-            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === "orders" ? "text-green-700" : "text-gray-400"}`}
+            onClick={() => {
+              setActiveTab("admin");
+              setAdminSubTab("orders");
+            }}
+            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === "admin" && adminSubTab === "orders" ? "text-green-700" : "text-gray-400"}`}
           >
             <ListOrdered size={22} />
             <span className="text-[10px] font-bold">অর্ডার</span>
           </button>
           <button 
-            onClick={() => setActiveTab("admin")}
-            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === "admin" ? "text-green-700" : "text-gray-400"}`}
+            onClick={() => {
+              setActiveTab("admin");
+              setAdminSubTab("users");
+            }}
+            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === "admin" && adminSubTab === "users" ? "text-green-700" : "text-gray-400"}`}
+          >
+            <UserIcon size={22} />
+            <span className="text-[10px] font-bold">ইউজার</span>
+          </button>
+          <button 
+            onClick={() => {
+              setActiveTab("admin");
+              setAdminSubTab("settings");
+            }}
+            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === "admin" && adminSubTab === "settings" ? "text-green-700" : "text-gray-400"}`}
           >
             <Settings size={22} />
             <span className="text-[10px] font-bold">সেটিংস</span>
@@ -2682,6 +3190,132 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Promo Order Modal */}
+      <AnimatePresence>
+        {showPromoModal && (
+          <div className="fixed inset-0 z-[110] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm p-0 md:p-4">
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="bg-white w-full max-w-md rounded-t-[32px] md:rounded-[32px] overflow-hidden shadow-2xl pb-10 md:pb-0"
+            >
+              <div className="bg-green-700 p-8 text-white relative">
+                <button 
+                  onClick={() => setShowPromoModal(false)}
+                  className="absolute top-4 right-4 p-2 hover:bg-white/20 rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white/20 backdrop-blur-md text-white border border-white/30">
+                  <Star size={32} className="fill-white" />
+                </div>
+                <h3 className="text-2xl font-black">{config.promoServiceTitle || "স্পেশাল সার্ভিস"}</h3>
+                <p className="text-green-50 opacity-80 text-sm mt-1">অর্ডার সম্পন্ন করতে অ্যামাউন্ট লিখে কনফার্ম করুন</p>
+              </div>
+              
+              <div className="p-8 space-y-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">টাকার পরিমাণ (৳)</label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl font-black text-gray-400">৳</span>
+                    <Input 
+                      type="number"
+                      value={promoAmount}
+                      onChange={e => setPromoAmount(e.target.value)}
+                      placeholder={String(config.promoServiceDefaultAmount || "0")}
+                      className="h-20 pl-10 text-4xl font-black rounded-3xl border-gray-100 bg-gray-50 focus:ring-green-500 text-green-700"
+                    />
+                  </div>
+                  <p className="text-[10px] text-gray-400 italic">পণ্য যেভাবে ডেলিভারি পান, ঠিক সেভাবেই এই সেবাটি পাবেন।</p>
+                </div>
+
+                <div className="bg-green-50 p-6 rounded-[24px] border border-green-100 space-y-4">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <UserIcon size={16} className="text-green-600" />
+                      <span className="text-xs font-bold text-gray-500 uppercase">আপনার নাম</span>
+                    </div>
+                    <Input 
+                      value={checkoutInfo.name}
+                      onChange={e => setCheckoutInfo({...checkoutInfo, name: e.target.value})}
+                      placeholder="আপনার নাম লিখুন"
+                      className="bg-white border-green-100 focus:ring-green-500 rounded-xl"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Phone size={16} className="text-green-600" />
+                      <span className="text-xs font-bold text-gray-500 uppercase">ফোন নাম্বার</span>
+                    </div>
+                    <Input 
+                      value={checkoutInfo.phone}
+                      onChange={e => setCheckoutInfo({...checkoutInfo, phone: e.target.value})}
+                      placeholder="ফোন নাম্বার লিখুন"
+                      className="bg-white border-green-100 focus:ring-green-500 rounded-xl"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <MapPin size={16} className="text-green-600" />
+                        <span className="text-xs font-bold text-gray-500 uppercase">ডেলিভারি ঠিকানা</span>
+                      </div>
+                      <button 
+                        onClick={async () => {
+                          const loc = await getUserLocation();
+                          if (loc) {
+                            setCheckoutInfo({
+                              ...checkoutInfo, 
+                              address: checkoutInfo.address || "আমার বর্তমান অবস্থান (ম্যাপ লিংক সহ সেভ করা হয়েছে)"
+                            });
+                            setToastMessage("আপনার লোকেশন ডিটেক্ট করা হয়েছে।");
+                            setShowToast(true);
+                          } else {
+                            setToastMessage("লোকেশন পাওয়া যায়নি। অনুগ্রহ করে পারমিশন দিন।");
+                            setShowToast(true);
+                          }
+                        }}
+                        disabled={isFetchingLocation}
+                        className="text-[10px] font-bold text-green-700 bg-white px-2 py-1 rounded-full border border-green-200 hover:bg-green-50 transition-colors flex items-center gap-1"
+                      >
+                        {isFetchingLocation ? "খুঁজছি..." : "লোকেশন দিন"}
+                      </button>
+                    </div>
+                    <Input 
+                      value={checkoutInfo.address}
+                      onChange={e => setCheckoutInfo({...checkoutInfo, address: e.target.value})}
+                      placeholder="আপনার পূর্ণাঙ্গ ঠিকানা লিখুন"
+                      className="bg-white border-green-100 focus:ring-green-500 rounded-xl"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                   <Button 
+                    variant="outline"
+                    onClick={() => setShowPromoModal(false)}
+                    className="flex-1 h-16 rounded-2xl font-bold border-gray-100"
+                  >
+                    বাতিল
+                  </Button>
+                  <Button 
+                    onClick={handlePlacePromoOrder}
+                    disabled={isPlacingPromoOrder}
+                    className="flex-[2] h-16 rounded-2xl bg-green-700 hover:bg-green-800 font-black text-xl shadow-xl shadow-green-100 text-white"
+                  >
+                    {isPlacingPromoOrder ? "প্রসেসিং..." : "কনফার্ম করুন"}
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Smart Install Modal */}
       <AnimatePresence>
         {showInstallModal && (
@@ -2731,13 +3365,22 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex flex-col gap-3">
-                  <Button 
-                    onClick={handleInstallApp}
-                    className="w-full bg-green-700 hover:bg-green-800 text-white font-bold h-14 rounded-2xl text-lg shadow-lg shadow-green-100"
-                  >
-                    <Download className="mr-2 h-5 w-5" />
-                    এখনই ইন্সটল করুন
-                  </Button>
+                  {deferredPrompt ? (
+                    <Button 
+                      onClick={handleInstallApp}
+                      className="w-full bg-green-700 hover:bg-green-800 text-white font-bold h-14 rounded-2xl text-lg shadow-lg shadow-green-100"
+                    >
+                      <Download className="mr-2 h-5 w-5" />
+                      এখনই ইন্সটল করুন
+                    </Button>
+                  ) : (
+                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
+                      <p className="text-xs text-amber-800 font-bold mb-1">সরাসরি ইন্সটল সম্ভব হচ্ছে না</p>
+                      <p className="text-[10px] text-amber-700 leading-tight">
+                        ম্যানুয়ালি ইন্সটল করতে ব্রাউজারের উপরে থাকা <strong className="text-amber-900 leading-none">৩-ডট মেনু (⋮)</strong> ক্লিক করে <strong className="text-amber-900 leading-none">'Install App'</strong> বা <strong className="text-amber-900 leading-none">'Add to Home Screen'</strong> আইকনটি খুঁজুন।
+                      </p>
+                    </div>
+                  )}
                   <button 
                     onClick={closeInstallModal}
                     className="w-full text-sm text-gray-500 font-medium py-2 hover:text-gray-700"
@@ -2788,7 +3431,7 @@ export default function App() {
 
             <div className="text-[10px] text-muted-foreground space-y-1">
               <p>ঠিকানা: {config.storeAddress}</p>
-              <p>© ২০২৬ {config.storeName || "ওয়াসিম স্টোর"}। সর্বস্বত্ব সংরক্ষিত।</p>
+              <p>© ২০২৬ {config.storeName || "ওয়াসিম স্টোর"}। সর্বস্বত্ব সংরক্ষিত। <span className="opacity-30">v1.0.2</span></p>
             </div>
           </div>
         </div>
