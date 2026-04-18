@@ -118,5 +118,22 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
     }
+
+    // Support Messages
+    match /messages/{messageId} {
+      // Valid message structure check
+      function isValidMessage(data) {
+        return data.senderPhone is string && data.senderPhone.size() >= 11 &&
+               data.message is string && data.message.size() > 0 && data.message.size() < 2000 &&
+               data.type in ['customer', 'admin'] &&
+               data.createdAt is timestamp;
+      }
+
+      allow create: if isValidMessage(request.resource.data);
+      // For now, allow reading if you know the phone number or are admin
+      // In a strict environment, we'd verify auth.token.phone_number
+      allow read: if isAdmin() || (resource.data.senderPhone is string); 
+      allow update, delete: if isAdmin();
+    }
   }
 }

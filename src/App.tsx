@@ -31,6 +31,8 @@ import {
   Share2,
   Star,
   MessageSquare,
+  MessageCircle,
+  Send,
   AlertCircle,
   Download,
   MapPin,
@@ -140,6 +142,7 @@ interface StoreNotification {
   title: string;
   message: string;
   createdAt: any;
+  targetPhone?: string;
 }
 
 interface StoreConfig {
@@ -367,21 +370,23 @@ export default function App() {
       return null;
     }
   };
-  const [adminSubTab, setAdminSubTab] = useState<"products" | "orders" | "users" | "settings">("orders");
+  const [adminSubTab, setAdminSubTab] = useState<"products" | "orders" | "users" | "settings" | "supports">("orders");
   const [passwordInput, setPasswordInput] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [newCategoryName, setNewCategoryName] = useState("");
-  const [notificationInput, setNotificationInput] = useState({ title: "", message: "" });
+  const [notificationInput, setNotificationInput] = useState({ title: "", message: "", targetPhone: "all" });
 
   const handleSendNotification = async () => {
     if (!notificationInput.title || !notificationInput.message) return;
     try {
       await addDoc(collection(db, "notifications"), {
-        ...notificationInput,
+        title: notificationInput.title,
+        message: notificationInput.message,
+        targetPhone: notificationInput.targetPhone,
         createdAt: serverTimestamp()
       });
-      setNotificationInput({ title: "", message: "" });
+      setNotificationInput({ title: "", message: "", targetPhone: "all" });
       setToastMessage("নোটিফিকেশন পাঠানো হয়েছে!");
       setShowToast(true);
     } catch (error) {
@@ -397,6 +402,9 @@ export default function App() {
   }, [orders, trackingPhone, isTrackingActive]);
 
   const [orderFilter, setOrderFilter] = useState<"pending" | "delivered">("pending");
+  const [supportMessage, setSupportMessage] = useState("");
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [messages, setMessages] = useState<any[]>([]);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
 
@@ -589,7 +597,12 @@ export default function App() {
       
       const filtered = nList.filter(n => {
         const date = n.createdAt?.toDate ? n.createdAt.toDate() : new Date();
-        return date > threeDaysAgo;
+        const isRecent = date > threeDaysAgo;
+        
+        // Target filtering
+        const isTargeted = n.targetPhone === 'all' || !n.targetPhone || (phoneUser && n.targetPhone === phoneUser.phone);
+        
+        return isRecent && isTargeted;
       });
 
       // Handle new notifications (Sound and Browser alert)
@@ -598,7 +611,10 @@ export default function App() {
           const newNotif = change.doc.data() as StoreNotification;
           const createdAt = newNotif.createdAt?.toMillis ? newNotif.createdAt.toMillis() : Date.now();
           
-          if (createdAt > sessionStartTime) {
+          // Target check for real-time notification
+          const isTargeted = newNotif.targetPhone === 'all' || !newNotif.targetPhone || (phoneUser && newNotif.targetPhone === phoneUser.phone);
+
+          if (createdAt > sessionStartTime && isTargeted) {
             // Play sound
             notificationSound.play().catch(e => console.log("Sound play error:", e));
             
@@ -744,6 +760,99 @@ export default function App() {
     };
   }, [user, config.adminEmail, lastOrderCount]);
 
+  useEffect(() => {
+    if (!db) return;
+    
+    // Subscribe to support messages
+    const q = query(collection(db, "messages"), orderBy("createdAt", "desc"), limit(50));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleSendSupportMessage = async () => {
+    if (!supportMessage.trim()) return;
+    
+    // Check if user is logged in
+    if (!phoneUser) {
+      setToastMessage("মেসেজ পাঠাতে আগে লগইন করুন!");
+      setShowToast(true);
+      setShowPhoneLogin(true);
+      return;
+    }
+
+    setIsSendingMessage(true);
+    try {
+      console.log("Sending message as:", phoneUser.phone);
+      await addDoc(collection(db, "messages"), {
+        senderName: phoneUser.name || "অচেনা কাস্টমার",
+        senderPhone: phoneUser.phone,
+        message: supportMessage,
+        createdAt: serverTimestamp(),
+        type: "customer"
+      });
+      console.log("Message sent successfully!");
+      setSupportMessage("");
+      setToastMessage("মেসেজটি পাঠানো হয়েছে!");
+      setShowToast(true);
+    } catch (error: any) {
+      console.error("Support message detailed error:", error);
+      setToastMessage("মেসেজ পাঠানো যায়নি! আবার চেষ্টা করুন।");
+      setShowToast(true);
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
+  const handleSendAdminReply = async (customerPhone: string, customerName: string, replyMsg: string) => {
+    if (!replyMsg.trim() || !isAdmin) return;
+    try {
+      await addDoc(collection(db, "messages"), {
+        senderName: "Admin",
+        senderPhone: customerPhone, // linked to the customer
+        message: replyMsg,
+        createdAt: serverTimestamp(),
+        type: "admin"
+      });
+      setToastMessage("উত্তর পাঠানো হয়েছে!");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Admin reply error:", error);
+    }
+  };
+
+  const [selectedAdminChatPhone, setSelectedAdminChatPhone] = useState<string | null>(null);
+
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!isAdmin) return;
+    try {
+      await deleteDoc(doc(db, "messages", messageId));
+      setToastMessage("মেসেজটি মুছে ফেলা হয়েছে!");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Delete message error:", error);
+    }
+  };
+
+  const handleDeleteConversation = async (customerPhone: string) => {
+    if (!isAdmin || !window.confirm("আপনি কি নিশ্চিত যে এই কাস্টমারের সব চ্যাট মুছে ফেলতে চান?")) return;
+    try {
+      const q = query(collection(db, "messages"), where("senderPhone", "==", customerPhone));
+      const snapshot = await getDocs(q);
+      const batch = writeBatch(db);
+      snapshot.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      await batch.commit();
+      setSelectedAdminChatPhone(null);
+      setToastMessage("পুরো কথোপকথন মুছে ফেলা হয়েছে!");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Delete conversation error:", error);
+    }
+  };
   useEffect(() => {
     if (user && config) {
       const userEmail = user.email?.toLowerCase().trim();
@@ -919,7 +1028,7 @@ export default function App() {
       
       const orderData = {
         customerName: checkoutInfo.name || "Guest",
-        customerPhone: checkoutInfo.phone || "00000000000",
+        customerPhone: phoneUser ? phoneUser.phone : (checkoutInfo.phone || "00000000000"),
         customerAddress: checkoutInfo.address || "No Address",
         items: itemsToSave,
         totalPrice: finalTotalPrice,
@@ -1187,7 +1296,7 @@ export default function App() {
 
       const orderData = {
         customerName: checkoutInfo.name || phoneUser.name,
-        customerPhone: checkoutInfo.phone || phoneUser.phone,
+        customerPhone: phoneUser.phone,
         customerAddress: checkoutInfo.address || "ঠিকানা দেওয়া হয়নি",
         items: [{
           id: "PROMO_SERVICE",
@@ -1653,17 +1762,15 @@ export default function App() {
                     </Button>
                     <Button 
                       variant="outline"
-                      className="w-full border-green-200 text-green-700 font-bold h-12 rounded-xl"
+                      className="w-full border-green-200 text-green-700 font-bold h-12 rounded-xl gap-2"
                       onClick={() => {
                         setIsCartOpen(false);
                         setIsOrderSuccess(false);
-                        const reviewSection = document.getElementById('review-section');
-                        if (reviewSection) {
-                          reviewSection.scrollIntoView({ behavior: 'smooth' });
-                        }
+                        setActiveTab("info");
                       }}
                     >
-                      রিভিউ দিন
+                      <MessageSquare size={18} />
+                      কথা বলুন
                     </Button>
                   </div>
                 </div>
@@ -2128,6 +2235,61 @@ export default function App() {
                     </div>
                   </CardContent>
                 </Card>
+                
+                {/* Chat/Support Section */}
+                <div className="space-y-4 pt-4">
+                  <h4 className="font-bold flex items-center gap-2">
+                    <MessageSquare size={20} className="text-green-600" />
+                    সরাসরি মেসেজ পাঠান
+                  </h4>
+                  <Card className="border-none shadow-sm bg-white overflow-hidden rounded-3xl">
+                    <CardContent className="p-4 space-y-4">
+                      <div className="max-h-[300px] overflow-y-auto space-y-3 p-3 bg-gray-50 rounded-2xl border border-gray-100">
+                        {messages.filter(m => m.senderPhone === phoneUser.phone).length === 0 ? (
+                          <div className="flex flex-col items-center justify-center py-10 text-center opacity-40">
+                            <MessageCircle size={48} className="mb-2" />
+                            <p className="text-xs italic">আপনি এখনো কোনো মেসেজ পাঠাননি। সাহায্যের জন্য মেসেজ লিখুন।</p>
+                          </div>
+                        ) : (
+                          messages
+                            .filter(m => m.senderPhone === phoneUser.phone)
+                            .sort((a, b) => (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0))
+                            .map((m, i) => (
+                              <div key={i} className={`flex ${m.type === 'admin' ? 'justify-start' : 'justify-end'}`}>
+                                <div className={`max-w-[85%] p-3 rounded-2xl text-sm shadow-sm ${
+                                  m.type === 'admin' 
+                                    ? 'bg-white border border-green-100 text-gray-800 rounded-tl-none' 
+                                    : 'bg-green-600 text-white rounded-tr-none'
+                                }`}>
+                                  {m.type === 'admin' && <p className="text-[10px] font-bold mb-1 opacity-70">অ্যাডমিন</p>}
+                                  <p className="leading-relaxed">{m.message}</p>
+                                  <p className="text-[9px] mt-1 opacity-60 text-right">
+                                    {m.createdAt?.toDate ? m.createdAt.toDate().toLocaleTimeString('bn-BD', {hour: '2-digit', minute:'2-digit'}) : "এখনই"}
+                                  </p>
+                                </div>
+                              </div>
+                            ))
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <Input 
+                          placeholder="আপনার সমস্যা বা প্রশ্ন লিখুন..." 
+                          value={supportMessage}
+                          onChange={e => setSupportMessage(e.target.value)}
+                          className="bg-gray-50 border-none rounded-xl focus-visible:ring-green-500 h-12"
+                          onKeyDown={(e) => e.key === 'Enter' && handleSendSupportMessage()}
+                        />
+                        <Button 
+                          onClick={handleSendSupportMessage} 
+                          disabled={isSendingMessage || !supportMessage.trim()}
+                          className="bg-green-600 hover:bg-green-700 text-white rounded-xl w-12 h-12 shrink-0 p-0"
+                        >
+                          <Send size={20} />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
 
                 {/* Notifications Section */}
                 <div className="space-y-4">
@@ -2352,6 +2514,7 @@ export default function App() {
                     { id: 'orders', label: 'অর্ডারসমূহ', icon: ListOrdered },
                     { id: 'products', label: 'পণ্যসমূহ', icon: Package },
                     { id: 'users', label: 'কাস্টমার', icon: UserIcon },
+                    { id: 'supports', label: 'মেসেজ', icon: MessageSquare },
                     { id: 'settings', label: 'সেটিংস', icon: Settings }
                   ].map(tab => (
                     <Button
@@ -2608,6 +2771,23 @@ export default function App() {
                         value={notificationInput.message}
                         onChange={e => setNotificationInput({...notificationInput, message: e.target.value})}
                       />
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold uppercase text-muted-foreground">কাকে পাঠাতে চান?</label>
+                        <select 
+                          className="w-full p-2 text-sm border rounded-md bg-white focus:ring-2 focus:ring-green-500 outline-none"
+                          value={notificationInput.targetPhone}
+                          onChange={e => setNotificationInput({...notificationInput, targetPhone: e.target.value})}
+                        >
+                          <option value="all">সবাইকে পাঠান</option>
+                          <optgroup label="কাস্টমার লিস্ট">
+                            {customers.map((c, i) => (
+                              <option key={i} value={c.phone}>
+                                {c.name} ({c.phone})
+                              </option>
+                            ))}
+                          </optgroup>
+                        </select>
+                      </div>
                       <Button onClick={handleSendNotification} className="w-full bg-green-600">পাঠিয়ে দিন</Button>
                     </CardContent>
                   </Card>
@@ -2785,6 +2965,203 @@ export default function App() {
                       </ScrollArea>
                     </CardContent>
                   </Card>
+                )}
+
+                {adminSubTab === "supports" && (
+                  <div className="bg-white rounded-[32px] shadow-2xl overflow-hidden border border-green-100 h-[750px] flex flex-row shadow-green-100/50 relative">
+                    {/* Conversations Sidebar - Hidden on mobile if a chat is selected */}
+                    <div className={`w-full md:w-[350px] border-r border-gray-100 flex flex-col bg-white transition-all duration-300 ${
+                      selectedAdminChatPhone ? 'hidden md:flex' : 'flex'
+                    }`}>
+                      <div className="p-6 border-b border-gray-100 bg-green-50/30">
+                        <h3 className="text-xl font-bold flex items-center gap-2 text-green-800">
+                          <MessageSquare className="text-green-600" />
+                          চ্যাট তালিকা
+                        </h3>
+                        <p className="text-[10px] text-green-600 mt-1">সব কাস্টমারের সাথে কথোপকথন</p>
+                      </div>
+                      <ScrollArea className="flex-1">
+                        <div className="p-3 space-y-2">
+                          {customers.filter(c => messages.some(m => m.senderPhone === c.phone)).length === 0 ? (
+                            <div className="py-24 text-center opacity-30">
+                              <MessageCircle size={64} className="mx-auto mb-3 text-green-700" />
+                              <p className="text-sm font-bold">এখনো কোনো মেসেজ নেই</p>
+                            </div>
+                          ) : (
+                            customers
+                              .filter(c => messages.some(m => m.senderPhone === c.phone))
+                              .map((customer, i) => {
+                                const customerMessages = messages.filter(m => m.senderPhone === customer.phone);
+                                const lastMsg = customerMessages.sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))[0];
+                                const isSelected = selectedAdminChatPhone === customer.phone;
+                                
+                                return (
+                                  <button
+                                    key={i}
+                                    onClick={() => setSelectedAdminChatPhone(customer.phone)}
+                                    className={`w-full p-4 rounded-3xl text-left transition-all flex items-center gap-4 relative group hover:scale-[1.02] active:scale-95 ${
+                                      isSelected ? 'bg-green-600 text-white shadow-xl shadow-green-200' : 'bg-gray-50/50 hover:bg-green-50'
+                                    }`}
+                                  >
+                                    <div className={`h-14 w-14 rounded-2xl flex-shrink-0 flex items-center justify-center font-bold text-xl shadow-inner ${
+                                      isSelected ? 'bg-white/20 text-white' : 'bg-green-100 text-green-700'
+                                    }`}>
+                                      {customer.name[0]}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex justify-between items-center mb-1">
+                                        <h4 className={`font-bold truncate text-base ${isSelected ? 'text-white' : 'text-gray-900'}`}>{customer.name}</h4>
+                                        <Badge className={`text-[10px] h-5 min-w-[22px] justify-center px-1.5 rounded-full border-none shadow-sm ${
+                                          isSelected ? 'bg-white text-green-700' : 'bg-green-600 text-white'
+                                        }`}>
+                                          {customerMessages.length}
+                                        </Badge>
+                                      </div>
+                                      <div className="flex flex-col">
+                                        <p className={`text-[11px] font-medium ${isSelected ? 'text-white/70' : 'text-green-600'}`}>{customer.phone}</p>
+                                        <p className={`text-[11px] truncate mt-1 italic ${isSelected ? 'text-white/80' : 'text-gray-500'}`}>
+                                          {lastMsg?.message || "মেসেজ নেই"}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </button>
+                                );
+                              })
+                          )}
+                        </div>
+                      </ScrollArea>
+                    </div>
+
+                    {/* Chat Window - Occupies full space on mobile if selected */}
+                    <div className={`flex-1 flex flex-col bg-slate-50 relative h-full ${
+                      !selectedAdminChatPhone ? 'hidden md:flex' : 'flex'
+                    }`}>
+                      {selectedAdminChatPhone ? (() => {
+                        const selectedCustomer = customers.find(c => c.phone === selectedAdminChatPhone);
+                        const chatMessages = messages
+                          .filter(m => m.senderPhone === selectedAdminChatPhone)
+                          .sort((a, b) => (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0));
+
+                        return (
+                          <div className="flex flex-col h-full overflow-hidden">
+                            {/* Chat Header */}
+                            <div className="p-4 bg-white border-b border-gray-100 flex items-center justify-between shadow-sm z-30">
+                              <div className="flex items-center gap-2 md:gap-4">
+                                {/* Back Button for Mobile */}
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  onClick={() => setSelectedAdminChatPhone(null)}
+                                  className="md:hidden text-green-600 hover:bg-green-50 rounded-full"
+                                >
+                                  <ArrowLeft size={24} />
+                                </Button>
+                                <div className="h-10 w-10 md:h-12 md:w-12 rounded-2xl bg-green-100 text-green-700 flex items-center justify-center font-bold text-lg md:text-xl shadow-inner uppercase">
+                                  {selectedCustomer?.name[0] || "?"}
+                                </div>
+                                <div className="min-w-0">
+                                  <h4 className="font-bold text-sm md:text-lg text-gray-900 leading-tight truncate">{selectedCustomer?.name || "অচেনা কাস্টমার"}</h4>
+                                  <p className="text-[10px] md:text-xs text-green-600 font-bold">{selectedAdminChatPhone}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 md:gap-2">
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  onClick={() => handleDeleteConversation(selectedAdminChatPhone)}
+                                  className="text-gray-400 hover:text-red-500 rounded-xl hover:bg-red-50 h-8 w-8 md:h-10 md:w-10"
+                                  title="পুরো চ্যাট মুছে ফেলুন"
+                                >
+                                  <Trash2 size={20} />
+                                </Button>
+                                {/* Close Button for Desktop */}
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  onClick={() => setSelectedAdminChatPhone(null)}
+                                  className="hidden md:flex text-gray-400 hover:text-green-600 rounded-xl h-10 w-10"
+                                >
+                                  <X size={24} />
+                                </Button>
+                              </div>
+                            </div>
+
+                            {/* Messages Area - Fixed Scroll */}
+                            <div className="flex-1 overflow-y-auto p-4 md:p-8 flex flex-col-reverse bg-gradient-to-b from-slate-50 to-white scrollbar-thin scrollbar-thumb-green-200">
+                              <div className="space-y-6 flex flex-col pb-4">
+                                {chatMessages.map((m, mi) => (
+                                  <div key={mi} className={`flex ${m.type === 'admin' ? 'justify-end' : 'justify-start'} group animate-in slide-in-from-bottom-2 duration-300`}>
+                                    <div className="relative group/msg max-w-[85%] md:max-w-[70%]">
+                                      <div className={`p-4 md:p-5 rounded-3xl text-sm shadow-sm relative ${
+                                        m.type === 'admin' 
+                                          ? 'bg-green-600 text-white rounded-tr-none shadow-green-200'
+                                          : 'bg-white border border-green-100 text-gray-800 rounded-tl-none shadow-gray-200/50'
+                                      }`}>
+                                        <p className="leading-relaxed whitespace-pre-wrap break-words">{m.message}</p>
+                                        <div className="text-[10px] mt-3 opacity-60 flex justify-between gap-6 border-t pt-2 border-white/10">
+                                          <span className="font-bold uppercase tracking-wider">{m.type === 'admin' ? 'অ্যাডমিন' : 'কাস্টমার'}</span>
+                                          <span className="font-mono">{m.createdAt?.toDate ? m.createdAt.toDate().toLocaleTimeString('bn-BD', {hour: '2-digit', minute:'2-digit', hour12: true}) : "এখনই"}</span>
+                                        </div>
+                                      </div>
+                                      <button
+                                        onClick={() => handleDeleteMessage(m.id)}
+                                        className="absolute -top-3 -right-3 p-2 bg-red-600 text-white rounded-full opacity-0 group-hover/msg:opacity-100 transition-all shadow-xl hover:scale-110 active:scale-95 z-30 flex items-center justify-center"
+                                        title="মেসেজ মুছুন"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                                <div id="admin-chat-end" />
+                              </div>
+                            </div>
+
+                            {/* Chat Input - Always at bottom */}
+                            <div className="p-4 md:p-6 bg-white border-t border-gray-100 shadow-[0_-10px_20px_-15px_rgba(0,0,0,0.1)] z-40">
+                              <div className="flex gap-2 md:gap-3 bg-gray-50/80 p-1.5 md:p-2 rounded-[24px] border-2 border-green-50 focus-within:border-green-400 focus-within:bg-white focus-within:ring-8 focus-within:ring-green-100 transition-all shadow-inner">
+                                <Input 
+                                  placeholder="আপনার উত্তর লিখুন..." 
+                                  id="admin-reply-input"
+                                  autoComplete="off"
+                                  className="bg-transparent border-none rounded-xl h-10 md:h-12 focus-visible:ring-0 shadow-none text-sm md:text-base pl-2 md:pl-4"
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      const input = document.getElementById("admin-reply-input") as HTMLInputElement;
+                                      if (input.value.trim() && selectedCustomer) {
+                                        handleSendAdminReply(selectedCustomer.phone, selectedCustomer.name, input.value);
+                                        input.value = "";
+                                      }
+                                    }
+                                  }}
+                                />
+                                <Button 
+                                  onClick={() => {
+                                    const input = document.getElementById("admin-reply-input") as HTMLInputElement;
+                                    if (input.value.trim() && selectedCustomer) {
+                                      handleSendAdminReply(selectedCustomer.phone, selectedCustomer.name, input.value);
+                                      input.value = "";
+                                    }
+                                  }}
+                                  className="bg-green-600 hover:bg-green-700 text-white rounded-[20px] w-10 h-10 md:w-14 md:h-12 shrink-0 p-0 shadow-xl shadow-green-200 transition-transform active:scale-90 flex items-center justify-center"
+                                >
+                                  <Send size={20} className="md:w-[22px] md:h-[22px]" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })() : (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center p-10 bg-slate-50">
+                          <div className="h-32 w-32 rounded-full bg-white shadow-2xl shadow-green-100 flex items-center justify-center text-green-600 mb-8 border-4 border-green-50">
+                            <MessageCircle size={64} className="animate-pulse" />
+                          </div>
+                          <h3 className="text-2xl font-black text-gray-800 mb-2">চ্যাট শুরু করুন</h3>
+                          <p className="text-gray-500 max-w-xs mx-auto text-sm">বাম পাশের তালিকা থেকে কাস্টমার সিলেক্ট করে সরাসরি কথা বলা শুরু করুন</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
 
                 {adminSubTab === "settings" && (

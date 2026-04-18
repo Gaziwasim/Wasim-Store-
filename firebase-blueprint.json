@@ -79,9 +79,23 @@
       "properties": {
         "title": { "type": "string", "description": "Title of the notification" },
         "message": { "type": "string", "description": "Content of the notification" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "When the notification was sent" }
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the notification was sent" },
+        "targetPhone": { "type": "string", "description": "Target phone number or 'all'" }
       },
       "required": ["title", "message"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A support message between customer and admin",
+      "type": "object",
+      "properties": {
+        "senderName": { "type": "string", "description": "Name of the sender" },
+        "senderPhone": { "type": "string", "description": "Phone number of the customer" },
+        "message": { "type": "string", "description": "Content of the message" },
+        "type": { "type": "string", "enum": ["customer", "admin"], "description": "Who sent the message" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the message was sent" }
+      },
+      "required": ["senderPhone", "message", "type", "createdAt"]
     }
   },
   "firestore": {
@@ -108,6 +122,10 @@
     "/notifications/{notificationId}": {
       "schema": "Notification",
       "description": "Collection of store notifications"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Collection of support messages"
     }
   }
 }
