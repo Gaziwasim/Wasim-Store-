@@ -728,25 +728,38 @@ export default function App() {
     const isAdminUser = user?.email === "mdgaziwasim@gmail.com" || (config.adminEmail && user?.email === config.adminEmail);
     
     if (isAdminUser) {
-      const qOrders = query(collection(db, "orders"), orderBy("createdAt", "desc"));
+      const qOrders = query(collection(db, "orders"));
       unsubscribeOrders = onSnapshot(qOrders, (snapshot) => {
         const oList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
         
+        // Sort in memory to avoid indexing issues
+        const sortedOrders = oList.sort((a, b) => {
+          const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+          const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+          return tB - tA;
+        });
+
         // Play sound if new order arrives (and it's not the first load)
-        if (lastOrderCount !== null && oList.length > lastOrderCount) {
+        if (lastOrderCount !== null && sortedOrders.length > lastOrderCount) {
           notificationAudio.current?.play().catch(e => console.log("Audio play failed:", e));
           setToastMessage("নতুন অর্ডার এসেছে!");
           setShowToast(true);
         }
         
-        setOrders(oList);
-        setLastOrderCount(oList.length);
+        setOrders(sortedOrders);
+        setLastOrderCount(sortedOrders.length);
       });
 
-      const qCustomers = query(collection(db, "customers"), orderBy("lastLogin", "desc"));
+      const qCustomers = query(collection(db, "customers"));
       const unsubscribeCustomers = onSnapshot(qCustomers, (snapshot) => {
         const cList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setCustomers(cList);
+        // Sort in memory
+        const sortedCustomers = cList.sort((a: any, b: any) => {
+          const tA = a.lastLogin?.toMillis ? a.lastLogin.toMillis() : 0;
+          const tB = b.lastLogin?.toMillis ? b.lastLogin.toMillis() : 0;
+          return tB - tA;
+        });
+        setCustomers(sortedCustomers);
       });
 
       return () => {
@@ -764,9 +777,16 @@ export default function App() {
     if (!db) return;
     
     // Subscribe to support messages
-    const q = query(collection(db, "messages"), orderBy("createdAt", "desc"), limit(50));
+    const q = query(collection(db, "messages"), limit(200));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const mList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      // Sort in memory to avoid index requirements
+      const sortedMessages = mList.sort((a, b) => {
+        const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        return tB - tA; // For internal message state we store as desc
+      });
+      setMessages(sortedMessages);
     });
 
     return () => unsubscribe();
