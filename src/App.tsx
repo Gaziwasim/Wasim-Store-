@@ -791,7 +791,8 @@ export default function App() {
         senderPhone: phoneUser.phone,
         message: supportMessage,
         createdAt: serverTimestamp(),
-        type: "customer"
+        type: "customer",
+        read: false
       });
       console.log("Message sent successfully!");
       setSupportMessage("");
@@ -836,6 +837,38 @@ export default function App() {
     }
   };
 
+  const handleDeleteCustomer = async (customerId: string) => {
+    if (!isAdmin || !window.confirm("আপনি কি নিশ্চিত যে এই কাস্টমার প্রোফাইলটি মুছে ফেলতে চান? এটি আর ফিরে পাওয়া যাবে না।")) return;
+    try {
+      await deleteDoc(doc(db, "customers", customerId));
+      setToastMessage("কাস্টমার প্রোফাইলটি মুছে ফেলা হয়েছে!");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Delete customer error:", error);
+      setToastMessage("মুছে ফেলা সম্ভব হয়নি!");
+      setShowToast(true);
+    }
+  };
+
+  const markMessagesAsRead = async (phone: string) => {
+    const unreadMessages = messages.filter(m => m.senderPhone === phone && m.type === 'customer' && !m.read);
+    if (unreadMessages.length === 0) return;
+
+    try {
+      const batch = writeBatch(db);
+      unreadMessages.forEach(msg => {
+        batch.update(doc(db, "messages", msg.id), { read: true });
+      });
+      await batch.commit();
+    } catch (error) {
+      console.error("Error marking messages as read:", error);
+    }
+  };
+
+  const handleAdminChatSelect = (phone: string) => {
+    setSelectedAdminChatPhone(phone);
+    markMessagesAsRead(phone);
+  };
   const handleDeleteConversation = async (customerPhone: string) => {
     if (!isAdmin || !window.confirm("আপনি কি নিশ্চিত যে এই কাস্টমারের সব চ্যাট মুছে ফেলতে চান?")) return;
     try {
@@ -2511,10 +2544,10 @@ export default function App() {
                 {/* Admin Tabs */}
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-hide">
                   {[
+                    { id: 'supports', label: 'মেসেজ', icon: MessageSquare },
                     { id: 'orders', label: 'অর্ডারসমূহ', icon: ListOrdered },
                     { id: 'products', label: 'পণ্যসমূহ', icon: Package },
                     { id: 'users', label: 'কাস্টমার', icon: UserIcon },
-                    { id: 'supports', label: 'মেসেজ', icon: MessageSquare },
                     { id: 'settings', label: 'সেটিংস', icon: Settings }
                   ].map(tab => (
                     <Button
@@ -2934,6 +2967,15 @@ export default function App() {
                                     <><ShieldAlert size={16} className="mr-2" /> ব্লক করুন</>
                                   )}
                                 </Button>
+                                <Button 
+                                  variant="outline" 
+                                  size="icon" 
+                                  className="h-10 w-10 text-red-500 border-red-100 bg-red-50 hover:bg-red-500 hover:text-white rounded-xl transition-all"
+                                  onClick={() => handleDeleteCustomer(customer.id)}
+                                  title="প্রোফাইল মুছুন"
+                                >
+                                  <Trash2 size={16} />
+                                </Button>
                                 {customer.image && (
                                   <Button 
                                     variant="outline" 
@@ -2990,15 +3032,25 @@ export default function App() {
                           ) : (
                             customers
                               .filter(c => messages.some(m => m.senderPhone === c.phone))
+                              .sort((a, b) => {
+                                const lastMsgA = messages
+                                  .filter(m => m.senderPhone === a.phone)
+                                  .sort((m1, m2) => (m2.createdAt?.toMillis?.() || 0) - (m1.createdAt?.toMillis?.() || 0))[0];
+                                const lastMsgB = messages
+                                  .filter(m => m.senderPhone === b.phone)
+                                  .sort((m1, m2) => (m2.createdAt?.toMillis?.() || 0) - (m1.createdAt?.toMillis?.() || 0))[0];
+                                return (lastMsgB.createdAt?.toMillis?.() || 0) - (lastMsgA.createdAt?.toMillis?.() || 0);
+                              })
                               .map((customer, i) => {
                                 const customerMessages = messages.filter(m => m.senderPhone === customer.phone);
+                                const unreadCount = customerMessages.filter(m => m.type === 'customer' && !m.read).length;
                                 const lastMsg = customerMessages.sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))[0];
                                 const isSelected = selectedAdminChatPhone === customer.phone;
                                 
                                 return (
                                   <button
                                     key={i}
-                                    onClick={() => setSelectedAdminChatPhone(customer.phone)}
+                                    onClick={() => handleAdminChatSelect(customer.phone)}
                                     className={`w-full p-4 rounded-3xl text-left transition-all flex items-center gap-4 relative group hover:scale-[1.02] active:scale-95 ${
                                       isSelected ? 'bg-green-600 text-white shadow-xl shadow-green-200' : 'bg-gray-50/50 hover:bg-green-50'
                                     }`}
@@ -3011,11 +3063,13 @@ export default function App() {
                                     <div className="flex-1 min-w-0">
                                       <div className="flex justify-between items-center mb-1">
                                         <h4 className={`font-bold truncate text-base ${isSelected ? 'text-white' : 'text-gray-900'}`}>{customer.name}</h4>
-                                        <Badge className={`text-[10px] h-5 min-w-[22px] justify-center px-1.5 rounded-full border-none shadow-sm ${
-                                          isSelected ? 'bg-white text-green-700' : 'bg-green-600 text-white'
-                                        }`}>
-                                          {customerMessages.length}
-                                        </Badge>
+                                        {unreadCount > 0 && (
+                                          <Badge className={`text-[10px] h-5 min-w-[22px] justify-center px-1.5 rounded-full border-none shadow-md animate-pulse ${
+                                            isSelected ? 'bg-white text-red-600' : 'bg-red-600 text-white'
+                                          }`}>
+                                            {unreadCount}
+                                          </Badge>
+                                        )}
                                       </div>
                                       <div className="flex flex-col">
                                         <p className={`text-[11px] font-medium ${isSelected ? 'text-white/70' : 'text-green-600'}`}>{customer.phone}</p>
