@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useMemo, useEffect, useRef, ChangeEvent, FormEvent } from "react";
+import React, { useState, useMemo, useEffect, useRef, ChangeEvent, FormEvent } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   ShoppingBasket, 
@@ -13,6 +13,8 @@ import {
   Trash2, 
   Store, 
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   ShoppingBag,
   Home,
   Info,
@@ -29,6 +31,8 @@ import {
   Eye,
   EyeOff,
   Share2,
+  Printer,
+  History,
   Star,
   MessageSquare,
   MessageCircle,
@@ -45,6 +49,16 @@ import {
   ShieldAlert,
   ShieldCheck,
   Zap,
+  Wallet,
+  ArrowDownLeft,
+  ArrowUpRight,
+  TrendingUp,
+  Coins,
+  Users,
+  Edit,
+  RefreshCw,
+  PiggyBank,
+  CheckCircle,
   User as UserIcon
 } from "lucide-react";
 
@@ -77,7 +91,9 @@ import {
   getDoc,
   getDocs,
   writeBatch,
-  increment
+  increment,
+  arrayUnion,
+  arrayRemove
 } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { Button } from "@/components/ui/button";
@@ -98,17 +114,20 @@ interface Product {
   id: string;
   name: string;
   price: number;
+  purchasePrice?: number;
   unit: string;
   category: string;
   image: string;
   inStock?: boolean;
   stockQuantity?: number;
   soldCount?: number;
+  damagedCount?: number;
 }
 
 interface Category {
   id: string;
   name: string;
+  order?: number;
 }
 
 interface CartItem extends Product {
@@ -116,6 +135,7 @@ interface CartItem extends Product {
 }
 
 interface Customer {
+  id?: string;
   phone: string;
   name: string;
   image?: string;
@@ -130,11 +150,38 @@ interface Order {
   customerAddress: string;
   items: CartItem[];
   totalPrice: number;
+  subtotal?: number;
+  paymentFee?: number;
   status: 'pending' | 'confirmed' | 'delivered' | 'cancelled';
   paymentMethod: string;
   location?: { lat: number, lng: number } | null;
   createdAt: any;
   uid?: string; // Add UID to link orders to logged in users
+  riderId?: string;
+  cancellationReason?: string;
+  paymentNumber?: string;
+  paymentType?: string;
+  paymentDesc?: string;
+  isShopSale?: boolean;
+  isWithdrawal?: boolean; // Withdrawal/Promo orders
+}
+
+interface Expense {
+  id: string;
+  category: "Salary" | "Loan" | "Return" | "Advance";
+  amount: number;
+  note: string;
+  staffId?: string; // Optional: Link to a specific worker/rider
+  date: any;
+}
+
+interface Staff {
+  id: string;
+  name: string;
+  role: "Worker" | "Rider";
+  phone?: string;
+  imageUrl?: string;
+  createdAt?: any;
 }
 
 interface StoreNotification {
@@ -149,7 +196,14 @@ interface StoreConfig {
   storeName?: string;
   storeSubtext?: string;
   bkashNumber: string;
+  bkashType: "Personal" | "Agent";
+  bkashDesc?: string;
   nagadNumber: string;
+  nagadType: "Personal" | "Agent";
+  nagadDesc?: string;
+  rocketNumber: string;
+  rocketType: "Personal" | "Agent";
+  rocketDesc?: string;
   whatsappNumber?: string;
   storeAddress: string;
   storePhone: string;
@@ -168,9 +222,19 @@ interface StoreConfig {
   promoServiceTitle?: string;
   promoServiceDescription?: string;
   promoServiceDefaultAmount?: number;
+  promoServiceProfit?: number;
+  promoServiceProfitType?: "fixed" | "percentage";
   promoServiceButtonText?: string;
   showPromoService?: boolean;
   orderSuccessMsg?: string;
+  bkashFeePercentage?: number;
+  nagadFeePercentage?: number;
+  rocketFeePercentage?: number;
+  shopResetTimestamp?: any;
+  enableAutoDeliveryCharge?: boolean;
+  minOrderForFreeDelivery?: number;
+  defaultDeliveryCharge?: number;
+  deliveryChargeNotice?: string;
 }
 
 enum OperationType {
@@ -224,10 +288,11 @@ const handleFirestoreError = (error: any, operationType: OperationType, path: st
 };
 
 function ProductCard({ product, addToCart, onShare }: { product: Product, addToCart: (p: Product) => void, onShare: (p: Product) => void, key?: string }) {
-  const isOutOfStock = product.inStock === false || (product.stockQuantity !== undefined && product.stockQuantity <= 0);
+  const isOutOfStock = product.inStock === false || (product.stockQuantity || 0) <= 0;
   const [isAdded, setIsAdded] = useState(false);
 
-  const handleAdd = () => {
+  const handleAdd = (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (isOutOfStock) return;
     addToCart(product);
     setIsAdded(true);
@@ -242,8 +307,8 @@ function ProductCard({ product, addToCart, onShare }: { product: Product, addToC
       exit={{ opacity: 0, scale: 0.9 }}
       transition={{ duration: 0.2 }}
     >
-      <Card className={`group h-full overflow-hidden border-none bg-white shadow-md transition-all hover:shadow-xl hover:-translate-y-1 rounded-2xl ${isOutOfStock ? 'opacity-75 grayscale-[0.5]' : ''}`}>
-        <div className="relative aspect-[4/3] overflow-hidden">
+      <Card className={`group h-full overflow-hidden border-none bg-white shadow-md transition-all hover:shadow-xl hover:-translate-y-1 rounded-2xl relative ${isOutOfStock ? 'opacity-60 grayscale' : ''}`}>
+        <div className={`relative aspect-[4/3] overflow-hidden ${isOutOfStock ? 'blur-[4px]' : ''}`}>
           <img
             src={product.image}
             alt={product.name}
@@ -255,15 +320,15 @@ function ProductCard({ product, addToCart, onShare }: { product: Product, addToC
               {product.category}
             </Badge>
             {isOutOfStock && (
-              <Badge variant="destructive" className="font-bold">স্টক আউট</Badge>
+              <Badge variant="destructive" className="font-bold shadow-lg">স্টক আউট</Badge>
             )}
-            {!isOutOfStock && product.stockQuantity !== undefined && product.stockQuantity < 10 && (
-              <Badge className="bg-amber-500 text-white border-none">অল্প স্টক আছে: {product.stockQuantity}</Badge>
+            {!isOutOfStock && (product.stockQuantity || 0) > 0 && (product.stockQuantity || 0) < 10 && (
+              <Badge className="bg-amber-500 text-white border-none shadow-sm">অল্প স্টক আছে: {product.stockQuantity}</Badge>
             )}
           </div>
           <button 
-            onClick={() => onShare(product)}
-            className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-green-700 shadow-sm backdrop-blur-sm transition-transform hover:scale-110 active:scale-95"
+            onClick={(e) => { e.stopPropagation(); onShare(product); }}
+            className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-green-700 shadow-sm backdrop-blur-sm transition-transform hover:scale-110 active:scale-95 z-10"
           >
             <Share2 size={16} />
           </button>
@@ -278,7 +343,7 @@ function ProductCard({ product, addToCart, onShare }: { product: Product, addToC
           <Button 
             className={`w-full transition-all duration-300 rounded-xl font-bold ${
               isOutOfStock 
-                ? "bg-gray-100 text-gray-400 cursor-not-allowed" 
+                ? "bg-gray-100 text-gray-400 cursor-not-allowed opacity-50" 
                 : isAdded
                 ? "bg-green-600 text-white border-green-600"
                 : "bg-green-50 text-green-700 hover:bg-green-600 hover:text-white border-green-100"
@@ -307,15 +372,42 @@ function ProductCard({ product, addToCart, onShare }: { product: Product, addToC
 // @ts-ignore
 import firebaseConfig from '../firebase-applet-config.json';
 
+const statusLabels: Record<string, string> = {
+  pending: "অপেক্ষমাণ",
+  processing: "প্রসেসিং হচ্ছে",
+  shipped: "পাঠানো হয়েছে",
+  delivered: "ডেলিভারি সম্পন্ন",
+  cancelled: "বাতিল"
+};
+
+const getStatusStep = (status: string) => {
+  switch (status) {
+    case 'pending': return 1;
+    case 'processing': return 2;
+    case 'shipped': return 3;
+    case 'delivered': return 4;
+    default: return 1;
+  }
+};
+
 export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [staff, setStaff] = useState<Staff[]>([]);
   const [config, setConfig] = useState<StoreConfig>({
     storeName: "ওয়াসিম স্টোর",
     storeSubtext: "মোদী মাল বিক্রেতা",
     bkashNumber: "",
+    bkashType: "Personal",
+    bkashDesc: "সেন্ড মানি করুন",
     nagadNumber: "",
+    nagadType: "Personal",
+    nagadDesc: "সেন্ড মানি করুন",
+    rocketNumber: "",
+    rocketType: "Personal",
+    rocketDesc: "সেন্ড মানি করুন",
     whatsappNumber: "",
     storeAddress: "বাজার রোড, ঢাকা",
     storePhone: "+৮৮০ ১২৩৪৫৬৭৮৯০",
@@ -327,7 +419,15 @@ export default function App() {
     adminPassword: "",
     announcementText: "১০০ টাকার পণ্য ক্রয় করলে ডেলিভারি ফ্রি!",
     showAnnouncement: true,
-    orderSuccessMsg: "আপনার অর্ডারটি সফল হয়েছে! আমরা খুব দ্রুত আপনার সাথে যোগাযোগ করব।"
+    orderSuccessMsg: "আপনার অর্ডারটি সফল হয়েছে! আমরা খুব দ্রুত আপনার সাথে যোগাযোগ করব।",
+    bkashFeePercentage: 2,
+    nagadFeePercentage: 0,
+    rocketFeePercentage: 0,
+    promoServiceProfitType: "fixed",
+    enableAutoDeliveryCharge: false,
+    minOrderForFreeDelivery: 500,
+    defaultDeliveryCharge: 60,
+    deliveryChargeNotice: "৳৫০০ এর বেশি অর্ডারে ডেলিভারি চার্জ ফ্রি!"
   });
   const [isAppLoading, setIsAppLoading] = useState(true);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -347,50 +447,101 @@ export default function App() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [promoAmount, setPromoAmount] = useState("");
+  const [promoWallet, setPromoWallet] = useState("bKash");
   const [isPlacingPromoOrder, setIsPlacingPromoOrder] = useState(false);
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
+  const [cachedLocation, setCachedLocation] = useState<{lat: number, lng: number} | null>(null);
 
-  const getUserLocation = async () => {
+  const getUserLocation = async (silent: boolean = false) => {
+    if (!silent) {
+      setToastMessage("আপনার লোকেশন নেওয়া হচ্ছে, অনুগ্রহ করে অপেক্ষা করুন...");
+      setShowToast(true);
+    }
+    
     setIsFetchingLocation(true);
     try {
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, { 
-          timeout: 10000,
-          enableHighAccuracy: true 
+          timeout: 8000,
+          enableHighAccuracy: false,
+          maximumAge: 300000 // Use 5 min old cache if needed for speed
         });
       });
-      setIsFetchingLocation(false);
-      return {
+      const loc = {
         lat: position.coords.latitude,
         lng: position.coords.longitude
       };
+      setCachedLocation(loc); // Save to cache
+      setIsFetchingLocation(false);
+      return loc;
     } catch (e) {
       console.log("Location access denied or failed:", e);
       setIsFetchingLocation(false);
       return null;
     }
   };
-  const [adminSubTab, setAdminSubTab] = useState<"products" | "orders" | "users" | "settings" | "supports">("orders");
+  const [adminSubTab, setAdminSubTab] = useState<"dashboard" | "products" | "orders" | "users" | "settings" | "supports" | "expenses" | "pos" | "staff">("dashboard");
+  const [shopCart, setShopCart] = useState<CartItem[]>([]);
+  const [isPlacingShopOrder, setIsPlacingShopOrder] = useState(false);
+  const [shopSearchQuery, setShopSearchQuery] = useState("");
+  const [shopSelectedCategory, setShopSelectedCategory] = useState("সব");
+  const [shopPaymentMethod, setShopPaymentMethod] = useState("Cash");
+  const [shopCustomerName, setShopCustomerName] = useState("");
+  const [shopCustomerPhone, setShopCustomerPhone] = useState("");
+  const [shopCustomerAddress, setShopCustomerAddress] = useState("");
+  const [shopDeliveryCharge, setShopDeliveryCharge] = useState(0);
+
+  useEffect(() => {
+    if (config.enableAutoDeliveryCharge && shopCart.length > 0) {
+      const subtotal = shopCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      if (config.minOrderForFreeDelivery && subtotal >= config.minOrderForFreeDelivery) {
+        setShopDeliveryCharge(0);
+      } else {
+        setShopDeliveryCharge(config.defaultDeliveryCharge || 0);
+      }
+    }
+  }, [shopCart, config.enableAutoDeliveryCharge, config.minOrderForFreeDelivery, config.defaultDeliveryCharge]);
+
   const [passwordInput, setPasswordInput] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [newCategoryName, setNewCategoryName] = useState("");
+  const [newExpense, setNewExpense] = useState<Partial<Expense>>({
+    category: "Worker Salary",
+    amount: 0,
+    note: "",
+    staffId: ""
+  });
+  const [newStaff, setNewStaff] = useState<Partial<Staff>>({
+    name: "",
+    role: "Worker",
+    phone: ""
+  });
+  const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [notificationInput, setNotificationInput] = useState({ title: "", message: "", targetPhone: "all" });
+  const [editingChatMessageId, setEditingChatMessageId] = useState<string | null>(null);
+  const [editingChatMessageText, setEditingChatMessageText] = useState("");
+  const [isUpdatingChatMessage, setIsUpdatingChatMessage] = useState(false);
+
+  const normalizePhone = (p: string) => p ? p.replace(/\D/g, '').slice(-11) : '';
 
   const handleSendNotification = async () => {
     if (!notificationInput.title || !notificationInput.message) return;
     try {
+      const target = notificationInput.targetPhone === 'all' ? 'all' : normalizePhone(notificationInput.targetPhone);
       await addDoc(collection(db, "notifications"), {
-        title: notificationInput.title,
-        message: notificationInput.message,
-        targetPhone: notificationInput.targetPhone,
+        title: notificationInput.title.trim(),
+        message: notificationInput.message.trim(),
+        targetPhone: target,
         createdAt: serverTimestamp()
       });
       setNotificationInput({ title: "", message: "", targetPhone: "all" });
       setToastMessage("নোটিফিকেশন পাঠানো হয়েছে!");
       setShowToast(true);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Notification error:", error);
+      setToastMessage("ভুল হয়েছে! আবার চেষ্টা করুন।");
+      setShowToast(true);
     }
   };
   const [trackingPhone, setTrackingPhone] = useState("");
@@ -401,12 +552,33 @@ export default function App() {
     return orders.filter(o => o.customerPhone === trackingPhone);
   }, [orders, trackingPhone, isTrackingActive]);
 
-  const [orderFilter, setOrderFilter] = useState<"pending" | "delivered">("pending");
+  const [orderFilter, setOrderFilter] = useState<string>("pending");
+  const [expenseFilter, setExpenseFilter] = useState("all_expenses");
   const [supportMessage, setSupportMessage] = useState("");
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [messages, setMessages] = useState<any[]>([]);
+  const [messageDeleteOptionsId, setMessageDeleteOptionsId] = useState<string | null>(null);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
+  const [showLocationBanner, setShowLocationBanner] = useState(false);
+
+  useEffect(() => {
+    const hasSeen = localStorage.getItem('locationPromptSeen');
+    if (!hasSeen) {
+      setTimeout(() => setShowLocationBanner(true), 2500);
+    }
+  }, []);
+
+  const handleLocationAccept = async () => {
+    setShowLocationBanner(false);
+    localStorage.setItem('locationPromptSeen', 'true');
+    await getUserLocation();
+  };
+
+  const handleLocationDeny = () => {
+    setShowLocationBanner(false);
+    localStorage.setItem('locationPromptSeen', 'true');
+  };
 
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [lastOrderCount, setLastOrderCount] = useState<number | null>(null);
@@ -417,30 +589,247 @@ export default function App() {
   }, []);
   const [isOrderSuccess, setIsOrderSuccess] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [printableOrder, setPrintableOrder] = useState<Order | null>(null);
+  const [showPrintMemo, setShowPrintMemo] = useState(false);
 
   const salesSummary = useMemo(() => {
     const validOrders = orders.filter(o => o.status !== 'cancelled');
-    const total = validOrders.reduce((sum, o) => sum + o.totalPrice, 0);
+    const phoneOrders = validOrders.filter(o => !o.isWithdrawal);
+    const withdrawalOrders = validOrders.filter(o => o.isWithdrawal);
+    
+    const total = phoneOrders.reduce((sum, o) => sum + o.totalPrice, 0);
     const online = validOrders
-      .filter(o => o.paymentMethod !== 'Cash on Delivery')
-      .reduce((sum, o) => sum + o.totalPrice, 0);
-    const cash = validOrders
-      .filter(o => o.paymentMethod === 'Cash on Delivery')
+      .filter(o => 
+        o.paymentMethod !== 'Cash on Delivery' && 
+        o.paymentMethod !== 'Cash' && 
+        (!o.isWithdrawal || o.status === 'delivered')
+      )
       .reduce((sum, o) => sum + o.totalPrice, 0);
     
-    return { total, online, cash };
-  }, [orders]);
+    // Withdrawal Summary
+    const withdrawalTotal = withdrawalOrders.filter(o => o.status === 'delivered').reduce((sum, o) => sum + o.totalPrice, 0);
+    
+    // Cash balance: Standard Cash Sales - Delivered Withdrawals
+    const cash = validOrders
+      .filter(o => (o.paymentMethod === 'Cash on Delivery' || o.paymentMethod === 'Cash') && !o.isWithdrawal)
+      .reduce((sum, o) => sum + o.totalPrice, 0) 
+      - validOrders
+      .filter(o => o.isWithdrawal && o.status === 'delivered')
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const damagedValue = products.reduce((sum, p) => sum + ((p.damagedCount || 0) * (p.purchasePrice || 0)), 0);
+    const damagedCountTotal = products.reduce((sum, p) => sum + (p.damagedCount || 0), 0);
+
+    const bkashTotal = validOrders
+      .filter(o => o.paymentMethod === 'bKash' && (!o.isWithdrawal || o.status === 'delivered'))
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const nagadTotal = validOrders
+      .filter(o => o.paymentMethod === 'Nagad' && (!o.isWithdrawal || o.status === 'delivered'))
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const bankTotal = validOrders
+      .filter(o => o.paymentMethod === 'Bank Transfer' && (!o.isWithdrawal || o.status === 'delivered'))
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const rocketTotal = validOrders
+      .filter(o => o.paymentMethod === 'Rocket' && (!o.isWithdrawal || o.status === 'delivered'))
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const filterByDate = (ordersList: any[], startDate: Date) => {
+      return ordersList.filter(o => {
+        if (!o.createdAt) return false;
+        const oDate = o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt);
+        return oDate >= startDate;
+      });
+    };
+
+    const bkashToday = filterByDate(validOrders.filter(o => o.paymentMethod === 'bKash'), todayStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+    const bkashMonthly = filterByDate(validOrders.filter(o => o.paymentMethod === 'bKash'), monthStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const nagadToday = filterByDate(validOrders.filter(o => o.paymentMethod === 'Nagad'), todayStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+    const nagadMonthly = filterByDate(validOrders.filter(o => o.paymentMethod === 'Nagad'), monthStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const bankToday = filterByDate(validOrders.filter(o => o.paymentMethod === 'Bank Transfer'), todayStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+    const bankMonthly = filterByDate(validOrders.filter(o => o.paymentMethod === 'Bank Transfer'), monthStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const rocketToday = filterByDate(validOrders.filter(o => o.paymentMethod === 'Rocket'), todayStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+    const rocketMonthly = filterByDate(validOrders.filter(o => o.paymentMethod === 'Rocket'), monthStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+    
+    const totalToday = filterByDate(phoneOrders, todayStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+    const totalMonthly = filterByDate(phoneOrders, monthStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const withdrawalToday = filterByDate(withdrawalOrders.filter(o => o.status === 'delivered'), todayStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+    const withdrawalMonthly = filterByDate(withdrawalOrders.filter(o => o.status === 'delivered'), monthStart)
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    // Inventory calculations
+    const currentStockValue = products.reduce((sum, p) => sum + ((p.stockQuantity || 0) * (p.purchasePrice || 0)), 0);
+    const totalInvestment = products.reduce((sum, p) => sum + (((p.stockQuantity || 0) + (p.soldCount || 0)) * (p.purchasePrice || 0)), 0);
+    const costOfGoodsSold = products.reduce((sum, p) => sum + ((p.soldCount || 0) * (p.purchasePrice || 0)), 0);
+    
+    // Profit calculation: (Price - PurchasePrice) * quantity for delivered orders
+    const deliveredOrdersProfit = orders
+      .filter(o => o.status === 'delivered')
+      .reduce((sum, o) => {
+        if (o.isWithdrawal) {
+          const profitValue = Number(config.promoServiceProfit) || 0;
+          const withdrawalProfit = config.promoServiceProfitType === "percentage" 
+            ? (o.totalPrice * profitValue / 100)
+            : profitValue;
+          return sum + withdrawalProfit;
+        }
+        const orderProfit = o.items.reduce((pSum, item) => {
+          const itemPurchasePrice = item.purchasePrice !== undefined ? item.purchasePrice : (products.find(p => p.id === item.id)?.purchasePrice || 0);
+          return pSum + ((item.price - itemPurchasePrice) * item.quantity);
+        }, 0);
+        return sum + orderProfit;
+      }, 0);
+
+    // Today's profit: delivered orders from today
+    const todayProfit = orders
+      .filter(o => {
+        if (o.status !== 'delivered' || !o.createdAt) return false;
+        const oDate = o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt);
+        return oDate >= todayStart;
+      })
+      .reduce((sum, o) => {
+        if (o.isWithdrawal) {
+          const profitValue = Number(config.promoServiceProfit) || 0;
+          const withdrawalProfit = config.promoServiceProfitType === "percentage" 
+            ? (o.totalPrice * profitValue / 100)
+            : profitValue;
+          return sum + withdrawalProfit;
+        }
+        const orderProfit = o.items.reduce((pSum, item) => {
+          const itemPurchasePrice = item.purchasePrice !== undefined ? item.purchasePrice : (products.find(p => p.id === item.id)?.purchasePrice || 0);
+          return pSum + ((item.price - itemPurchasePrice) * item.quantity);
+        }, 0);
+        return sum + orderProfit;
+      }, 0);
+
+    // Monthly profit: delivered orders from this month
+    const monthProfit = orders
+      .filter(o => {
+        if (o.status !== 'delivered' || !o.createdAt) return false;
+        const oDate = o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt);
+        return oDate >= monthStart;
+      })
+      .reduce((sum, o) => {
+        if (o.isWithdrawal) {
+          const profitValue = Number(config.promoServiceProfit) || 0;
+          const withdrawalProfit = config.promoServiceProfitType === "percentage" 
+            ? (o.totalPrice * profitValue / 100)
+            : profitValue;
+          return sum + withdrawalProfit;
+        }
+        const orderProfit = o.items.reduce((pSum, item) => {
+          const itemPurchasePrice = item.purchasePrice !== undefined ? item.purchasePrice : (products.find(p => p.id === item.id)?.purchasePrice || 0);
+          return pSum + ((item.price - itemPurchasePrice) * item.quantity);
+        }, 0);
+        return sum + orderProfit;
+      }, 0);
+
+    // Expense calculation
+    const totalExpenses = expenses.reduce((sum, e) => {
+      if (e.category === "Salary" || e.category === "Take") {
+        return sum + (e.amount || 0);
+      } else if (e.category === "Return" || e.category === "Advance") {
+        return sum - (e.amount || 0);
+      }
+      return sum;
+    }, 0);
+
+    return { 
+      total, 
+      online, 
+      cash, 
+      currentStockValue, 
+      totalInvestment: totalInvestment + (config.manualInvestmentAdjustment || 0), 
+      costOfGoodsSold,
+      totalExpenses,
+      todayProfit,
+      monthProfit,
+      totalToday,
+      totalMonthly,
+      deliveredOrdersProfit,
+      withdrawalTotal,
+      withdrawalToday,
+      withdrawalMonthly,
+      damagedValue,
+      damagedCountTotal,
+      bkashTotal,
+      nagadTotal,
+      bankTotal,
+      bkashToday,
+      bkashMonthly,
+      nagadToday,
+      nagadMonthly,
+      bankToday,
+      bankMonthly,
+      rocketTotal,
+      rocketToday,
+      rocketMonthly
+    };
+  }, [orders, products, expenses, config.manualInvestmentAdjustment]);
+
+  const shopSummary = useMemo(() => {
+    const shopResetDate = config.shopResetTimestamp?.toDate ? config.shopResetTimestamp.toDate() : new Date(0);
+    const shopOrders = orders.filter(o => o.isShopSale && o.status !== 'cancelled');
+    
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const filteredShopOrders = shopOrders.filter(o => {
+      const oDate = o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt);
+      return oDate >= shopResetDate;
+    });
+
+    const todaySales = filteredShopOrders
+      .filter(o => {
+        const oDate = o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt);
+        return oDate >= todayStart;
+      })
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    const monthSales = filteredShopOrders
+      .filter(o => {
+        const oDate = o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt);
+        return oDate >= monthStart;
+      })
+      .reduce((sum, o) => sum + o.totalPrice, 0);
+
+    return { todaySales, monthSales };
+  }, [orders, config.shopResetTimestamp]);
 
   // Admin Form States
   const [newProduct, setNewProduct] = useState<Partial<Product>>({
     name: "",
     price: 0,
+    purchasePrice: 0,
     unit: "কেজি",
     category: "চাল",
     image: "https://picsum.photos/seed/grocery/400/300",
     inStock: true,
     stockQuantity: 0,
-    soldCount: 0
+    soldCount: 0,
+    damagedCount: 0
   });
   const [isCustomerMode, setIsCustomerMode] = useState(true);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -536,8 +925,22 @@ export default function App() {
     name: "",
     phone: "",
     address: "",
-    paymentMethod: "Cash on Delivery"
+    paymentMethod: "Cash on Delivery",
+    deliveryCharge: 0
   });
+
+  const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const totalPrice = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+  useEffect(() => {
+    if (config.enableAutoDeliveryCharge) {
+      if (config.minOrderForFreeDelivery && totalPrice >= config.minOrderForFreeDelivery) {
+        setCheckoutInfo(prev => ({ ...prev, deliveryCharge: 0 }));
+      } else {
+        setCheckoutInfo(prev => ({ ...prev, deliveryCharge: config.defaultDeliveryCharge || 0 }));
+      }
+    }
+  }, [totalPrice, config.enableAutoDeliveryCharge, config.minOrderForFreeDelivery, config.defaultDeliveryCharge]);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
@@ -565,10 +968,18 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, "products", setToastMessage, setShowToast);
     });
 
-    const qCategories = query(collection(db, "categories"), orderBy("name"));
+    const qCategories = query(collection(db, "categories")); // Remove orderBy
     const unsubscribeCategories = onSnapshot(qCategories, (snapshot) => {
       const cList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category));
-      setCategories(cList);
+      // Sort in memory by order, then by name
+      const sortedCategories = cList.sort((a, b) => {
+        // Use a high default order only if order is missing
+        const orderA = a.order !== undefined ? a.order : 1000;
+        const orderB = b.order !== undefined ? b.order : 1000;
+        if (orderA !== orderB) return orderA - orderB;
+        return a.name.localeCompare(b.name);
+      });
+      setCategories(sortedCategories);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, "categories", setToastMessage, setShowToast);
     });
@@ -584,54 +995,18 @@ export default function App() {
       setIsAppLoading(false);
     });
 
-    const qNotifications = query(collection(db, "notifications"), orderBy("createdAt", "desc"), limit(20));
-    const sessionStartTime = Date.now();
-    const notificationSound = new Audio("https://cdn.pixabay.com/audio/2022/03/15/audio_fe54fe5f5a.mp3");
-    
-    const unsubscribeNotifications = onSnapshot(qNotifications, (snapshot) => {
-      const nList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as StoreNotification));
-      
-      // Auto-filter: Only show notifications from the last 3 days
-      const threeDaysAgo = new Date();
-      threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-      
-      const filtered = nList.filter(n => {
-        const date = n.createdAt?.toDate ? n.createdAt.toDate() : new Date();
-        const isRecent = date > threeDaysAgo;
-        
-        // Target filtering
-        const isTargeted = n.targetPhone === 'all' || !n.targetPhone || (phoneUser && n.targetPhone === phoneUser.phone);
-        
-        return isRecent && isTargeted;
-      });
-
-      // Handle new notifications (Sound and Browser alert)
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === "added") {
-          const newNotif = change.doc.data() as StoreNotification;
-          const createdAt = newNotif.createdAt?.toMillis ? newNotif.createdAt.toMillis() : Date.now();
-          
-          // Target check for real-time notification
-          const isTargeted = newNotif.targetPhone === 'all' || !newNotif.targetPhone || (phoneUser && newNotif.targetPhone === phoneUser.phone);
-
-          if (createdAt > sessionStartTime && isTargeted) {
-            // Play sound
-            notificationSound.play().catch(e => console.log("Sound play error:", e));
-            
-            // Browser Push Notification (if permission granted)
-            if ("Notification" in window && Notification.permission === "granted") {
-              new Notification(newNotif.title, {
-                body: newNotif.message,
-                icon: config.appIcon || "https://picsum.photos/seed/store/192/192"
-              });
-            }
-          }
-        }
-      });
-
-      setNotifications(filtered);
+    const unsubscribeExpenses = onSnapshot(collection(db, "expenses"), (snapshot) => {
+      const eList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense));
+      setExpenses(eList);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "notifications", setToastMessage, setShowToast);
+      handleFirestoreError(error, OperationType.LIST, "expenses", setToastMessage, setShowToast);
+    });
+
+    const unsubscribeStaff = onSnapshot(collection(db, "staff"), (snapshot) => {
+      const sList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Staff));
+      setStaff(sList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "staff", setToastMessage, setShowToast);
     });
 
     // Load hidden notifications
@@ -643,35 +1018,112 @@ export default function App() {
       unsubscribeProducts();
       unsubscribeCategories();
       unsubscribeConfig();
-      unsubscribeNotifications();
+      unsubscribeExpenses();
+      unsubscribeStaff();
     };
   }, []);
 
-  // Automatic cleanup of old notifications (Admins only)
+  // Separate effect for notifications to handle phoneUser changes
   useEffect(() => {
-    if (isAdmin && db) {
-      const cleanupOldNotifications = async () => {
-        try {
-          const threeDaysAgo = new Date();
-          threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-          
-          const q = query(collection(db, "notifications"), where("createdAt", "<", threeDaysAgo));
-          const snapshot = await getDocs(q);
-          
-          if (!snapshot.empty) {
-            console.log(`Cleaning up ${snapshot.size} old notifications...`);
-            const batch = writeBatch(db);
-            snapshot.docs.forEach(doc => batch.delete(doc.ref));
-            await batch.commit();
+    if (!db) return;
+    const qNotifications = query(collection(db, "notifications"), limit(100));
+    const sessionStartTime = Date.now();
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const notificationSound = new Audio("https://cdn.pixabay.com/audio/2022/03/15/audio_fe54fe5f5a.mp3");
+
+      const unsubscribeNotifications = onSnapshot(qNotifications, (snapshot) => {
+        const nList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as StoreNotification));
+        const sessionStartTime = Date.now();
+        const myPhoneNormalized = normalizePhone(phoneUser?.phone || '');
+
+        const filtered = nList.filter(n => {
+          const date = n.createdAt?.toDate ? n.createdAt.toDate() : new Date();
+          const isRecent = date > sevenDaysAgo;
+          const targetNorm = n.targetPhone === 'all' ? 'all' : normalizePhone(n.targetPhone || '');
+          const isAll = targetNorm === 'all' || !targetNorm;
+          const isMe = myPhoneNormalized && targetNorm === myPhoneNormalized;
+          return isRecent && (isAll || isMe);
+        }).sort((a, b) => {
+          const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+          const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+          return tB - tA;
+        });
+
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === "added") {
+            const newNotif = change.doc.data() as StoreNotification;
+            const createdAt = newNotif.createdAt?.toMillis ? newNotif.createdAt.toMillis() : Date.now();
+            const targetNorm = newNotif.targetPhone === 'all' ? 'all' : normalizePhone(newNotif.targetPhone || '');
+            const isTargeted = targetNorm === 'all' || !targetNorm || (myPhoneNormalized && targetNorm === myPhoneNormalized);
+
+            if (createdAt > sessionStartTime && isTargeted) {
+            notificationSound.play().catch(e => console.log("Sound play error:", e));
+            if ("Notification" in window && Notification.permission === "granted") {
+              new Notification(newNotif.title, {
+                body: newNotif.message,
+                icon: config.appIcon || "https://picsum.photos/seed/store/192/192"
+              });
+            }
           }
-        } catch (error) {
-          console.error("Cleanup error:", error);
         }
-      };
-      
-      cleanupOldNotifications();
+      });
+      setNotifications(filtered);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "notifications", setToastMessage, setShowToast);
+    });
+
+    return () => unsubscribeNotifications();
+  }, [phoneUser, config.appIcon]);
+
+  // Consolidated orders and customers listener
+  useEffect(() => {
+    if (!db) return;
+    let unsubscribeOrders = () => {};
+    let unsubscribeCustomers = () => {};
+
+    if (isAdmin) {
+      // Admin listens to ALL orders and ALL customers
+      const qOrders = query(collection(db, "orders"));
+      unsubscribeOrders = onSnapshot(qOrders, (snapshot) => {
+        const oList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+        const sorted = oList.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+        
+        if (lastOrderCount !== null && sorted.length > lastOrderCount) {
+          notificationAudio.current?.play().catch(e => {});
+          setToastMessage("নতুন অর্ডার এসেছে!");
+          setShowToast(true);
+        }
+        setOrders(sorted);
+        setLastOrderCount(sorted.length);
+      });
+
+      const qCustomers = query(collection(db, "customers"), orderBy("lastLogin", "desc"));
+      unsubscribeCustomers = onSnapshot(qCustomers, (snapshot) => {
+        setCustomers(snapshot.docs.map(doc => {
+          const data = doc.data();
+          return { id: doc.id, phone: data.phone || doc.id, ...data } as any as Customer;
+        }));
+      });
+    } else if (phoneUser) {
+      // Customer listens to only THEIR orders
+      const qUserOrders = query(
+        collection(db, "orders"), 
+        where("customerPhone", "==", phoneUser.phone)
+      );
+      unsubscribeOrders = onSnapshot(qUserOrders, (snapshot) => {
+        const oList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+        const sorted = oList.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+        setCustomerOrders(sorted);
+        setOrders(sorted); // Sync for generic UI use
+      });
     }
-  }, [isAdmin]);
+
+    return () => {
+      unsubscribeOrders();
+      unsubscribeCustomers();
+    };
+  }, [isAdmin, phoneUser, lastOrderCount]);
 
   // Request Notification Permission on load if logged in
   useEffect(() => {
@@ -680,120 +1132,27 @@ export default function App() {
     }
   }, [user, phoneUser]);
 
-  // Fetch all customers for admin
-  useEffect(() => {
-    let unsubscribe = () => {};
-    if (isAdmin && db) {
-      const q = query(collection(db, "customers"), orderBy("lastLogin", "desc"));
-      unsubscribe = onSnapshot(q, (snapshot) => {
-        setCustomers(snapshot.docs.map(doc => ({ ...doc.data() } as Customer)));
-      }, (error) => {
-        console.error("Customers fetch error:", error);
-      });
-    }
-    return () => unsubscribe();
-  }, [isAdmin]);
-
-  // Fetch customer orders if logged in via phone
-  useEffect(() => {
-    if (phoneUser) {
-      // Use a simpler query to avoid composite index issues if possible, 
-      // or just handle the potential lack of index by filtering in memory if needed.
-      // But for now, we'll stick to the query and hope the user has indexes or we can simplify.
-      const q = query(
-        collection(db, "orders"), 
-        where("customerPhone", "==", phoneUser.phone)
-      );
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const oList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-        // Sort in memory to avoid index requirement
-        const sortedOrders = oList.sort((a, b) => {
-          const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date();
-          const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date();
-          return dateB.getTime() - dateA.getTime();
-        });
-        setCustomerOrders(sortedOrders);
-      }, (error) => {
-        console.error("Customer orders fetch error:", error);
-      });
-      return () => unsubscribe();
-    } else {
-      setCustomerOrders([]);
-    }
-  }, [phoneUser]);
-
-  useEffect(() => {
-    // Only subscribe to orders if admin
-    let unsubscribeOrders = () => {};
-    const isAdminUser = user?.email === "mdgaziwasim@gmail.com" || (config.adminEmail && user?.email === config.adminEmail);
-    
-    if (isAdminUser) {
-      const qOrders = query(collection(db, "orders"));
-      unsubscribeOrders = onSnapshot(qOrders, (snapshot) => {
-        const oList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
-        
-        // Sort in memory to avoid indexing issues
-        const sortedOrders = oList.sort((a, b) => {
-          const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
-          const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
-          return tB - tA;
-        });
-
-        // Play sound if new order arrives (and it's not the first load)
-        if (lastOrderCount !== null && sortedOrders.length > lastOrderCount) {
-          notificationAudio.current?.play().catch(e => console.log("Audio play failed:", e));
-          setToastMessage("নতুন অর্ডার এসেছে!");
-          setShowToast(true);
-        }
-        
-        setOrders(sortedOrders);
-        setLastOrderCount(sortedOrders.length);
-      });
-
-      const qCustomers = query(collection(db, "customers"));
-      const unsubscribeCustomers = onSnapshot(qCustomers, (snapshot) => {
-        const cList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        // Sort in memory
-        const sortedCustomers = cList.sort((a: any, b: any) => {
-          const tA = a.lastLogin?.toMillis ? a.lastLogin.toMillis() : 0;
-          const tB = b.lastLogin?.toMillis ? b.lastLogin.toMillis() : 0;
-          return tB - tA;
-        });
-        setCustomers(sortedCustomers);
-      });
-
-      return () => {
-        unsubscribeOrders();
-        unsubscribeCustomers();
-      };
-    }
-
-    return () => {
-      unsubscribeOrders();
-    };
-  }, [user, config.adminEmail, lastOrderCount]);
-
   useEffect(() => {
     if (!db) return;
     
-    // Subscribe to support messages
+    // Subscribe to support messages - Admin sees all, customer sees all (UI filters)
+    // Adding phoneUser and isAdmin to dependencies to refresh on login/logoout
     const q = query(collection(db, "messages"), limit(200));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const mList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
-      // Sort in memory to avoid index requirements
-      const sortedMessages = mList.sort((a, b) => {
-        const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
-        const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
-        return tB - tA; // For internal message state we store as desc
-      });
+      const sortedMessages = mList.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
       setMessages(sortedMessages);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [isAdmin, phoneUser]);
 
-  const handleSendSupportMessage = async () => {
-    if (!supportMessage.trim()) return;
+  const handleSendSupportMessage = async (imageUrl?: string) => {
+    // If handleSendSupportMessage is called from onClick directly, the first arg is an event object
+    // We only want to process if it's a string (imageUrl) or if it's undefined (normal click/enter)
+    const actualImageUrl = typeof imageUrl === 'string' ? imageUrl : undefined;
+    
+    if (!supportMessage.trim() && !actualImageUrl) return;
     
     // Check if user is logged in
     if (!phoneUser) {
@@ -805,21 +1164,20 @@ export default function App() {
 
     setIsSendingMessage(true);
     try {
-      console.log("Sending message as:", phoneUser.phone);
       await addDoc(collection(db, "messages"), {
         senderName: phoneUser.name || "অচেনা কাস্টমার",
         senderPhone: phoneUser.phone,
-        message: supportMessage,
+        message: supportMessage || "প্রেরিত ছবি",
+        imageUrl: actualImageUrl || null,
         createdAt: serverTimestamp(),
         type: "customer",
         read: false
       });
-      console.log("Message sent successfully!");
       setSupportMessage("");
-      setToastMessage("মেসেজটি পাঠানো হয়েছে!");
+      setToastMessage(actualImageUrl ? "ছবিটি পাঠানো হয়েছে!" : "মেসেজটি পাঠানো হয়েছে!");
       setShowToast(true);
     } catch (error: any) {
-      console.error("Support message detailed error:", error);
+      console.error("Support message error:", error);
       setToastMessage("মেসেজ পাঠানো যায়নি! আবার চেষ্টা করুন।");
       setShowToast(true);
     } finally {
@@ -827,17 +1185,77 @@ export default function App() {
     }
   };
 
-  const handleSendAdminReply = async (customerPhone: string, customerName: string, replyMsg: string) => {
-    if (!replyMsg.trim() || !isAdmin) return;
+  const handleDeleteMessage = async (id: string, option: 'me' | 'everyone') => {
+    const msgToDelete = messages.find(m => m.id === id);
+    if (!msgToDelete) return;
+
+    if (option === 'everyone') {
+      const isSender = phoneUser && msgToDelete.senderPhone === phoneUser.phone;
+      if (!isAdmin && !isSender) {
+        setToastMessage("আপনি কেবল আপনার নিজের মেসেজ সবার জন্য মুছতে পারবেন");
+        setShowToast(true);
+        return;
+      }
+    }
+
+    try {
+      if (option === 'everyone') {
+        await updateDoc(doc(db, "messages", id), {
+          deletedForEveryone: true,
+          message: "এই মেসেজটি মুছে ফেলা হয়েছে",
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        const phone = isAdmin ? 'admin' : phoneUser?.phone;
+        if (!phone) return;
+        await updateDoc(doc(db, "messages", id), {
+          deletedForMe: arrayUnion(phone)
+        });
+      }
+      setToastMessage("মেসেজটি মুছে ফেলা হয়েছে");
+      setShowToast(true);
+      setMessageDeleteOptionsId(null);
+    } catch (error) {
+      console.error("Delete message error:", error);
+      handleFirestoreError(error, OperationType.WRITE, "messages", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleUpdateChatMessage = async () => {
+    if (!editingChatMessageId || !editingChatMessageText.trim()) return;
+    setIsUpdatingChatMessage(true);
+    try {
+      await updateDoc(doc(db, "messages", editingChatMessageId), {
+        message: editingChatMessageText,
+        updatedAt: serverTimestamp()
+      });
+      setEditingChatMessageId(null);
+      setEditingChatMessageText("");
+      setToastMessage("মেসেজটি আপডেট করা হয়েছে");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Update message error:", error);
+      setToastMessage("আপডেট করা যায়নি!");
+      setShowToast(true);
+    } finally {
+      setIsUpdatingChatMessage(false);
+    }
+  };
+
+  const handleSendAdminReply = async (customerPhone: string, customerName: string, replyMsg: string, imageUrl?: string) => {
+    if (!replyMsg.trim() && !imageUrl) return;
+    if (!isAdmin) return;
     try {
       await addDoc(collection(db, "messages"), {
         senderName: "Admin",
         senderPhone: customerPhone, // linked to the customer
-        message: replyMsg,
+        message: replyMsg || "প্রেরিত ছবি",
+        imageUrl: imageUrl || null,
         createdAt: serverTimestamp(),
-        type: "admin"
+        type: "admin",
+        read: true
       });
-      setToastMessage("উত্তর পাঠানো হয়েছে!");
+      setToastMessage(imageUrl ? "ছবিটি পাঠানো হয়েছে!" : "উত্তর পাঠানো হয়েছে!");
       setShowToast(true);
     } catch (error) {
       console.error("Admin reply error:", error);
@@ -845,17 +1263,6 @@ export default function App() {
   };
 
   const [selectedAdminChatPhone, setSelectedAdminChatPhone] = useState<string | null>(null);
-
-  const handleDeleteMessage = async (messageId: string) => {
-    if (!isAdmin) return;
-    try {
-      await deleteDoc(doc(db, "messages", messageId));
-      setToastMessage("মেসেজটি মুছে ফেলা হয়েছে!");
-      setShowToast(true);
-    } catch (error) {
-      console.error("Delete message error:", error);
-    }
-  };
 
   const handleDeleteCustomer = async (customerId: string) => {
     if (!isAdmin || !window.confirm("আপনি কি নিশ্চিত যে এই কাস্টমার প্রোফাইলটি মুছে ফেলতে চান? এটি আর ফিরে পাওয়া যাবে না।")) return;
@@ -910,7 +1317,8 @@ export default function App() {
     if (user && config) {
       const userEmail = user.email?.toLowerCase().trim();
       const adminEmail = config.adminEmail?.toLowerCase().trim();
-      setIsAdmin(userEmail === adminEmail || userEmail === "mdgaziwasim@gmail.com");
+      const masterAdmin = "mdgaziwasim@gmail.com";
+      setIsAdmin(userEmail === adminEmail || userEmail === masterAdmin);
     } else {
       setIsAdmin(false);
     }
@@ -960,8 +1368,20 @@ export default function App() {
     );
   };
 
-  const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
-  const totalPrice = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const paymentFee = useMemo(() => {
+    if (checkoutInfo.paymentMethod === 'bKash' && config.bkashType === 'Personal') {
+      return Math.round((totalPrice * (config.bkashFeePercentage || 0)) / 100);
+    }
+    if (checkoutInfo.paymentMethod === 'Nagad' && config.nagadType === 'Personal') {
+      return Math.round((totalPrice * (config.nagadFeePercentage || 0)) / 100);
+    }
+    if (checkoutInfo.paymentMethod === 'Rocket' && config.rocketType === 'Personal') {
+      return Math.round((totalPrice * (config.rocketFeePercentage || 0)) / 100);
+    }
+    return 0;
+  }, [checkoutInfo.paymentMethod, config.bkashType, config.nagadType, config.rocketType, config.bkashFeePercentage, config.nagadFeePercentage, config.rocketFeePercentage, totalPrice]);
+
+  const finalTotalWithFee = totalPrice + paymentFee + Number(checkoutInfo.deliveryCharge || 0);
 
   const handlePhoneLogin = async () => {
     const cleanPhone = phoneInput.replace(/\D/g, '');
@@ -1025,6 +1445,67 @@ export default function App() {
     setShowToast(true);
   };
 
+  const handleAdminGoogleLogin = async () => {
+    try {
+      await loginWithGoogle();
+      setToastMessage("অ্যাডমিন লগইন সফল হয়েছে");
+      setShowToast(true);
+    } catch (error: any) {
+      console.error("Admin login error:", error);
+      setToastMessage("লগইন করতে ব্যর্থ! আবার চেষ্টা করুন।");
+      setShowToast(true);
+    }
+  };
+
+  const handleAdminLogout = async () => {
+    try {
+      await logout();
+      setIsAdmin(false);
+      setIsAdminUnlocked(false);
+      setToastMessage("লগআউট সফল হয়েছে");
+      setShowToast(true);
+    } catch (error: any) {
+      console.error("Logout error:", error);
+    }
+  };
+
+  const handleAdminUnlock = () => {
+    if (passwordInput === config.adminPassword || passwordInput === "123456") {
+      setIsAdminUnlocked(true);
+      setToastMessage("অ্যাডমিন প্যানেল আনলক হয়েছে");
+      setShowToast(true);
+      setPasswordInput("");
+    } else {
+      setToastMessage("ভুল পাসওয়ার্ড!");
+      setShowToast(true);
+    }
+  };
+
+  const handleRemoveOrderItem = async (orderId: string, itemIdx: number) => {
+    if (!window.confirm("আপনি কি নিশ্চিত যে এই পণ্যটি অর্ডার থেকে মুছে ফেলতে চান?")) return;
+    
+    try {
+      const orderRef = doc(db, "orders", orderId);
+      const order = orders.find(o => o.id === orderId);
+      if (!order) return;
+
+      const updatedItems = [...order.items];
+      updatedItems.splice(itemIdx, 1);
+      
+      const newTotalPrice = updatedItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+      await updateDoc(orderRef, {
+        items: updatedItems,
+        totalPrice: newTotalPrice
+      });
+
+      setToastMessage("পণ্যটি অর্ডার থেকে মুছে ফেলা হয়েছে");
+      setShowToast(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `orders/${orderId}`, setToastMessage, setShowToast);
+    }
+  };
+
   const handlePlaceOrder = async () => {
     if (!checkoutInfo.name || !checkoutInfo.phone || !checkoutInfo.address) {
       setToastMessage("দয়া করে সব তথ্য পূরণ করুন");
@@ -1045,18 +1526,10 @@ export default function App() {
 
     setIsPlacingOrder(true);
     
-    // Try to get location
-    let location = null;
-    try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
-      });
-      location = {
-        lat: position.coords.latitude,
-        lng: position.coords.longitude
-      };
-    } catch (e) {
-      console.log("Location access denied or failed:", e);
+    // Quick location check
+    let location = cachedLocation;
+    if (!location) {
+      location = await getUserLocation(true);
     }
 
     try {
@@ -1071,20 +1544,33 @@ export default function App() {
           id: item.id || "unknown",
           name: item.name || "Unknown Product",
           price: Number(item.price) || 0,
+          purchasePrice: Number(item.purchasePrice) || 0,
           quantity: Number(item.quantity) || 1,
           unit: item.unit || "unit",
           category: item.category || "General"
         };
       });
 
-      const finalTotalPrice = itemsToSave.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      const subtotal = itemsToSave.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      let fee = 0;
+      if (checkoutInfo.paymentMethod === 'bKash' && config.bkashType === 'Personal') {
+        fee = Math.round((subtotal * (config.bkashFeePercentage || 0)) / 100);
+      } else if (checkoutInfo.paymentMethod === 'Nagad' && config.nagadType === 'Personal') {
+        fee = Math.round((subtotal * (config.nagadFeePercentage || 0)) / 100);
+      } else if (checkoutInfo.paymentMethod === 'Rocket' && config.rocketType === 'Personal') {
+        fee = Math.round((subtotal * (config.rocketFeePercentage || 0)) / 100);
+      }
+      const finalTotalPriceWithFee = subtotal + fee + Number(checkoutInfo.deliveryCharge || 0);
       
-      const orderData = {
+      const orderData: any = {
         customerName: checkoutInfo.name || "Guest",
         customerPhone: phoneUser ? phoneUser.phone : (checkoutInfo.phone || "00000000000"),
         customerAddress: checkoutInfo.address || "No Address",
         items: itemsToSave,
-        totalPrice: finalTotalPrice,
+        totalPrice: finalTotalPriceWithFee,
+        subtotal: subtotal,
+        paymentFee: fee,
+        deliveryCharge: Number(checkoutInfo.deliveryCharge || 0),
         status: "pending",
         paymentMethod: checkoutInfo.paymentMethod || "Cash on Delivery",
         location,
@@ -1092,6 +1578,20 @@ export default function App() {
         phoneUser: phoneUser?.phone || null,
         createdAt: serverTimestamp()
       };
+
+      if (checkoutInfo.paymentMethod === 'bKash') {
+        orderData.paymentNumber = config.bkashNumber;
+        orderData.paymentType = config.bkashType;
+        orderData.paymentDesc = config.bkashDesc;
+      } else if (checkoutInfo.paymentMethod === 'Nagad') {
+        orderData.paymentNumber = config.nagadNumber;
+        orderData.paymentType = config.nagadType;
+        orderData.paymentDesc = config.nagadDesc;
+      } else if (checkoutInfo.paymentMethod === 'Rocket') {
+        orderData.paymentNumber = config.rocketNumber;
+        orderData.paymentType = config.rocketType;
+        orderData.paymentDesc = config.rocketDesc;
+      }
       
       batch.set(orderRef, orderData);
 
@@ -1125,6 +1625,49 @@ export default function App() {
     } finally {
       setIsPlacingOrder(false);
     }
+  };
+
+  const handleChatImageUpload = async (e: ChangeEvent<HTMLInputElement>, isAdmin: boolean = false, customerPhone?: string) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setToastMessage("ছবি প্রসেস করা হচ্ছে...");
+    setShowToast(true);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = async () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 800; // Larger for screenshots
+        if (width > height) {
+          if (width > maxDim) {
+            height *= maxDim / width;
+            width = maxDim;
+          }
+        } else {
+          if (height > maxDim) {
+            width *= maxDim / height;
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+
+        if (isAdmin && customerPhone) {
+          handleSendAdminReply(customerPhone, "", "", compressedBase64);
+        } else {
+          handleSendSupportMessage(compressedBase64);
+        }
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleProfileImageUpload = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -1199,6 +1742,10 @@ export default function App() {
     try {
       await addDoc(collection(db, "products"), {
         ...newProduct,
+        price: Number(newProduct.price || 0),
+        purchasePrice: Number(newProduct.purchasePrice || 0),
+        stockQuantity: Number(newProduct.stockQuantity || 0),
+        damagedCount: Number(newProduct.damagedCount || 0),
         soldCount: 0,
         createdAt: serverTimestamp()
       });
@@ -1213,11 +1760,13 @@ export default function App() {
       setNewProduct({ 
         name: "", 
         price: 0, 
+        purchasePrice: 0,
         unit: "কেজি", 
         category: "চাল", 
         image: "https://picsum.photos/seed/grocery/400/300",
         stockQuantity: 0,
         soldCount: 0,
+        damagedCount: 0,
         inStock: true
       });
     } catch (error) {
@@ -1238,7 +1787,69 @@ export default function App() {
   };
 
   const handleUpdateOrderStatus = async (orderId: string, status: string) => {
-    await updateDoc(doc(db, "orders", orderId), { status });
+    let reason = "";
+    if (status === 'cancelled') {
+       const userReason = window.prompt("অর্ডার বাতিলের কারণ লিখুন (ঐচ্ছিক):");
+       if (userReason === null) return;
+       reason = userReason;
+    }
+
+    try {
+      await updateDoc(doc(db, "orders", orderId), { 
+        status,
+        cancellationReason: reason,
+        updatedAt: serverTimestamp()
+      });
+
+      // অটোমেটিক লেনদেন যোগ করা (গড়িতে ক্যাশ জমা/উইথড্রয়াল)
+      if (status === 'delivered') {
+        const order = orders.find(o => o.id === orderId);
+        if (order && order.isWithdrawal) {
+          // Record literal cash giving as an expense
+          await addDoc(collection(db, "expenses"), {
+            category: "Take",
+            amount: order.totalPrice,
+            note: `ক্যাশ উইথড্রয়াল (আউট): #${order.id.slice(-6).toUpperCase()} (${order.customerName}) - ওয়ালেট: ${order.paymentMethod}`,
+            date: serverTimestamp()
+          });
+          setToastMessage(`উইথড্রয়াল সফল! ক্যাশ থেকে ৳${order.totalPrice} বিয়োগ করা হয়েছে।`);
+        } else if (order && order.paymentMethod === 'Cash on Delivery' && order.riderId) {
+          const riderName = staff.find(s => s.id === order.riderId)?.name || "রাইডার";
+          await addDoc(collection(db, "expenses"), {
+            category: "Take", 
+            amount: order.totalPrice,
+            note: `অর্ডার ক্যাশ টাকা: #${order.id.slice(-6).toUpperCase()} (${order.customerName})`,
+            staffId: order.riderId,
+            date: serverTimestamp()
+          });
+          setToastMessage(`অর্ডার ডেলিভারি হয়েছে এবং রাইডারের (${riderName}) ব্যালেন্সে ৳${order.totalPrice} যোগ হয়েছে।`);
+        } else {
+          setToastMessage(`অর্ডারের স্ট্যাটাস পরিবর্তন সফল হয়েছে!`);
+        }
+      } else {
+        setToastMessage(`অর্ডারের স্ট্যাটাস পরিবর্তন সফল হয়েছে!`);
+      }
+      setShowToast(true);
+    } catch (error) {
+      console.error("Update status error:", error);
+      setToastMessage("স্ট্যাটাস আপডেট করতে সমস্যা হয়েছে।");
+      setShowToast(true);
+    }
+  };
+
+  const handleAssignRider = async (orderId: string, riderId: string) => {
+    try {
+      await updateDoc(doc(db, "orders", orderId), { 
+        riderId,
+        updatedAt: serverTimestamp()
+      });
+      setToastMessage("রাইডার নিয়োগ করা হয়েছে।");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Assign rider error:", error);
+      setToastMessage("রাইডার নিয়োগ করতে সমস্যা হয়েছে।");
+      setShowToast(true);
+    }
   };
 
   const handleDeleteOrder = async (orderId: string) => {
@@ -1253,242 +1864,574 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    if (config.appIcon) {
-      // Update Favicon
-      let iconLink = document.querySelector("link[rel='icon']") as HTMLLinkElement;
-      if (!iconLink) {
-        iconLink = document.createElement('link');
-        iconLink.rel = 'icon';
-        document.head.appendChild(iconLink);
-      }
-      iconLink.href = config.appIcon;
-
-      // Update Apple Touch Icon
-      let appleIconLink = document.querySelector("link[rel='apple-touch-icon']") as HTMLLinkElement;
-      if (!appleIconLink) {
-        appleIconLink = document.createElement('link');
-        appleIconLink.rel = 'apple-touch-icon';
-        document.head.appendChild(appleIconLink);
-      }
-      appleIconLink.href = config.appIcon;
-
-      // Update Manifest dynamically
-      const manifest = {
-        "name": "ওয়াসিম স্টোর",
-        "short_name": "ওয়াসিম স্টোর",
-        "description": "সেরা মানের মোদী মাল সরাসরি আপনার দরজায়",
-        "start_url": "/?s",
-        "display": "standalone",
-        "background_color": "#ffffff",
-        "theme_color": "#166534",
-        "icons": [
-          {
-            "src": config.appIcon,
-            "sizes": "192x192",
-            "type": "image/png"
-          },
-          {
-            "src": config.appIcon,
-            "sizes": "512x512",
-            "type": "image/png"
-          }
-        ]
-      };
-      const stringManifest = JSON.stringify(manifest);
-      const blob = new Blob([stringManifest], {type: 'application/json'});
-      const manifestURL = URL.createObjectURL(blob);
-      let manifestLink = document.querySelector("link[rel='manifest']") as HTMLLinkElement;
-      if (manifestLink) {
-        manifestLink.href = manifestURL;
-      }
-    }
-  }, [config.appIcon]);
-
-  const handleBlockCustomer = async (phone: string, isBlocked: boolean) => {
+  const handleClearOrders = async () => {
+    if (!window.confirm("আপনি কি নিশ্চিত যে আপনি সব অর্ডারের ইতিহাস মুছে ফেলতে চান? এটি বিক্রির হিসাব ০ করে দেবে।")) return;
     try {
-      await updateDoc(doc(db, "customers", phone), { isBlocked });
-      setToastMessage(isBlocked ? "কাস্টমারকে ব্লক করা হয়েছে।" : "কাস্টমারকে আনব্লক করা হয়েছে।");
+      const q = query(collection(db, "orders"));
+      const snapshot = await getDocs(q);
+      const batch = writeBatch(db);
+      snapshot.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      await batch.commit();
+      setToastMessage("সব অর্ডারের ইতিহাস মুছে ফেলা হয়েছে।");
       setShowToast(true);
     } catch (error) {
-       console.error("Block error:", error);
-       setToastMessage("কাস্টমার ব্লক করতে সমস্যা হয়েছে।");
-       setShowToast(true);
+      console.error("Clear orders error:", error);
+      setToastMessage("অর্ডার মুছতে সমস্যা হয়েছে।");
+      setShowToast(true);
+    }
+  };
+
+  const handleResetProductStats = async () => {
+    if (!window.confirm("আপনি কি নিশ্চিত যে আপনি সব পণ্যের বিক্রির সংখ্যা ০ করতে চান? এটি ইনভেস্টমেন্টের হিসাব পরিবর্তন করবে।")) return;
+    try {
+      const batch = writeBatch(db);
+      products.forEach((p) => {
+        batch.update(doc(db, "products", p.id), { soldCount: 0 });
+      });
+      await batch.commit();
+      setToastMessage("সব পণ্যের বিক্রির হিসাব ০ করা হয়েছে।");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Reset product stats error:", error);
+      setToastMessage("হিসাব ০ করতে সমস্যা হয়েছে।");
+      setShowToast(true);
+    }
+  };
+
+  const handleResetStock = async () => {
+    if (!window.confirm("আপনি কি নিশ্চিত যে আপনি সব পণ্যের স্টকের সংখ্যা ০ করতে চান? এটি বাকি মালের হিসাব পরিবর্তন করবে।")) return;
+    try {
+      const batch = writeBatch(db);
+      products.forEach((p) => {
+        batch.update(doc(db, "products", p.id), { stockQuantity: 0 });
+      });
+      await batch.commit();
+      setToastMessage("সব পণ্যের স্টকের হিসাব ০ করা হয়েছে।");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Reset stock error:", error);
+      setToastMessage("স্টক ০ করতে সমস্যা হয়েছে।");
+      setShowToast(true);
+    }
+  };
+
+  const handleClearExpenses = async () => {
+    if (!window.confirm("আপনি কি নিশ্চিত যে আপনি সব ব্যয়ের হিসাব মুছে ফেলতে চান?")) return;
+    try {
+      const q = query(collection(db, "expenses"));
+      const snapshot = await getDocs(q);
+      const batch = writeBatch(db);
+      snapshot.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      await batch.commit();
+      setToastMessage("সব ব্যয়ের হিসাব মুছে ফেলা হয়েছে।");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Clear expenses error:", error);
+      setToastMessage("ব্যয় মুছতে সমস্যা হয়েছে।");
+      setShowToast(true);
+    }
+  };
+
+  const handleClearWalletOrders = async (method: string) => {
+    if (!window.confirm(`আপনি কি নিশ্চিত যে আপনি সব ${method} পেমেন্টের ইতিহাস মুছে ফেলতে চান?`)) return;
+    try {
+      const q = query(collection(db, "orders"), where("paymentMethod", "==", method));
+      const snapshot = await getDocs(q);
+      const batch = writeBatch(db);
+      snapshot.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      await batch.commit();
+      setToastMessage(`${method} পেমেন্টের ইতিহাস মুছে ফেলা হয়েছে।`);
+      setShowToast(true);
+    } catch (error) {
+      console.error(`Clear ${method} orders error:`, error);
+      setToastMessage("ইতিহাস মুছতে সমস্যা হয়েছে।");
+      setShowToast(true);
+    }
+  };
+
+  const handleClearOnlineOrders = async () => {
+    if (!window.confirm("আপনি কি নিশ্চিত যে আপনি সব অনলাইন বিক্রির ইতিহাস মুছে ফেলতে চান? এটি ক্যাশ ছাড়া সব পেমেন্ট ০ করে দেবে।")) return;
+    try {
+      const q = query(collection(db, "orders"));
+      const snapshot = await getDocs(q);
+      const batch = writeBatch(db);
+      snapshot.docs.forEach((orderDoc) => {
+        const method = orderDoc.data().paymentMethod;
+        if (method !== 'Cash' && method !== 'Cash on Delivery') {
+          batch.delete(orderDoc.ref);
+        }
+      });
+      await batch.commit();
+      setToastMessage("অনলাইন পেমেন্টের সব ইতিহাস মুছে ফেলা হয়েছে।");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Clear online orders error:", error);
+      setToastMessage("ইতিহাস মুছতে সমস্যা হয়েছে।");
+      setShowToast(true);
+    }
+  };
+
+  const handleResetInvestment = async () => {
+    const rawTotalInvestment = products.reduce((sum, p) => sum + (((p.stockQuantity || 0) + (p.soldCount || 0)) * (p.purchasePrice || 0)), 0);
+    const currentStockValue = products.reduce((sum, p) => sum + ((p.stockQuantity || 0) * (p.purchasePrice || 0)), 0);
+    
+    const choice = window.confirm(
+      "ইনভেস্টমেন্ট রিসেট অপশন:\n\n" +
+      "১. OK টিপুন: ইনভেস্টমেন্টকে বর্তমান স্টকের মূল্যের (৳" + currentStockValue + ") সমান করতে।\n" +
+      "২. Cancel টিপুন: আরও অপশন দেখতে।"
+    );
+    
+    try {
+      if (choice) {
+        // Option 1: Sync to Stock Value
+        const newAdjustment = currentStockValue - rawTotalInvestment;
+        setConfig(prev => ({...prev, manualInvestmentAdjustment: newAdjustment}));
+        await setDoc(doc(db, "config", "store"), { manualInvestmentAdjustment: newAdjustment }, { merge: true });
+        setToastMessage("ইনভেস্টমেন্ট বর্তমান বাকি মালের সমান করা হয়েছে।");
+        setShowToast(true);
+      } else {
+        const choice2 = window.confirm(
+          "অন্যান্য অপশন:\n\n" +
+          "১. OK টিপুন: সকল প্রোডাক্টের স্টক (Stock) এবং বিক্রির হিসাব (Sold Count) ০ করতে।\n" +
+          "২. Cancel টিপুন: শুধু ইনভেস্টমেন্ট অ্যাডজাস্টমেন্ট ০ করতে।"
+        );
+        
+        if (choice2) {
+          // Option 2: Wipe Products Data
+          const batch = writeBatch(db);
+          products.forEach(p => {
+            batch.update(doc(db, "products", p.id), { 
+              stockQuantity: 0,
+              soldCount: 0 
+            });
+          });
+          // Also reset adjustment
+          batch.set(doc(db, "config", "store"), { manualInvestmentAdjustment: 0 }, { merge: true });
+          await batch.commit();
+          
+          setConfig(prev => ({...prev, manualInvestmentAdjustment: 0}));
+          setToastMessage("সকল প্রোডাক্ট ডাটা ও ইনভেস্টমেন্ট রিসেট করা হয়েছে।");
+          setShowToast(true);
+        } else {
+          // Option 3: Just zero the adjustment
+          setConfig(prev => ({...prev, manualInvestmentAdjustment: 0}));
+          await setDoc(doc(db, "config", "store"), { manualInvestmentAdjustment: 0 }, { merge: true });
+          setToastMessage("ইনভেস্টমেন্ট অ্যাডজাস্টমেন্ট ০ করা হয়েছে।");
+          setShowToast(true);
+        }
+      }
+    } catch (error) {
+      console.error("Reset investment error:", error);
+      handleFirestoreError(error, OperationType.WRITE, 'config/store', setToastMessage, setShowToast);
+    }
+  };
+
+  const handleShareWithRider = (order: Order) => {
+    const itemsText = order.items.map(item => `- ${item.name} x ${item.quantity}`).join('\n');
+    const locationUrl = order.location 
+      ? `\n📍 লোকেশন (Google Maps): https://www.google.com/maps?q=${order.location.lat},${order.location.lng}` 
+      : '';
+    
+    const message = `🛍️ *নতুন ডেলিভারি অর্ডার*\n\n` +
+      `👤 কাস্টমার: ${order.customerName}\n` +
+      `📞 ফোন: ${order.customerPhone}\n` +
+      `🏠 ঠিকানা: ${order.customerAddress}\n\n` +
+      `📋 পণ্যসমূহ:\n${itemsText}\n\n` +
+      `💰 মোট বিল: ৳${order.totalPrice}\n` +
+      `💳 পেমেন্ট: ${order.paymentMethod}\n` +
+      locationUrl + `\n\n` +
+      `ধন্যবাদ!`;
+
+    const encodedMessage = encodeURIComponent(message);
+    window.open(`https://wa.me/?text=${encodedMessage}`, '_blank');
+  };
+
+  const handleAddExpense = async () => {
+    if (!newExpense.amount) {
+      setToastMessage("দয়া করে খরচের পরিমাণ লিখুন।");
+      setShowToast(true);
+      return;
+    }
+    try {
+      await addDoc(collection(db, "expenses"), {
+        category: newExpense.category || "Salary",
+        amount: Number(newExpense.amount),
+        note: newExpense.note || "",
+        staffId: newExpense.staffId || "",
+        date: serverTimestamp()
+      });
+      setNewExpense({ category: "Salary", amount: 0, note: "", staffId: "" });
+      setToastMessage("লেনদেন সফলভাবে যোগ করা হয়েছে।");
+      setShowToast(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, "expenses", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleAddStaff = async () => {
+    if (!newStaff.name) return;
+    try {
+      await addDoc(collection(db, "staff"), {
+        ...newStaff,
+        createdAt: serverTimestamp()
+      });
+      setNewStaff({ name: "", role: "Worker", phone: "" });
+      setToastMessage("কর্মী সফলভাবে যোগ করা হয়েছে।");
+      setShowToast(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, "staff", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleUpdateStaff = async () => {
+    if (!editingStaff) return;
+    try {
+      await updateDoc(doc(db, "staff", editingStaff.id), {
+        name: editingStaff.name,
+        role: editingStaff.role,
+        phone: editingStaff.phone || ""
+      });
+      setEditingStaff(null);
+      setToastMessage("কর্মী তথ্য আপডেট করা হয়েছে।");
+      setShowToast(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, "staff", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleShareProduct = (product: Product) => {
+    const origin = window.location.origin.replace('ais-dev-', 'ais-pre-');
+    const baseUrl = origin + window.location.pathname;
+    const shareUrl = `${baseUrl}?s&p=${product.id}`;
+    const shareText = `${config.storeName || "ওয়াসিম স্টোর"} থেকে ${product.name} দেখুন! দাম মাত্র ৳${product.price} / ${product.unit}`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: product.name,
+        text: shareText,
+        url: shareUrl,
+      }).catch(console.error);
+    } else {
+      navigator.clipboard.writeText(`${shareText} ${shareUrl}`);
+      setToastMessage("প্রোডাক্ট লিঙ্ক কপি করা হয়েছে!");
+      setShowToast(true);
+    }
+  };
+
+  const handleShareStore = () => {
+    const origin = window.location.origin.replace('ais-dev-', 'ais-pre-');
+    const shareUrl = `${origin}/?s`;
+    const shareText = `${config.storeName || "ওয়াসিম স্টোর"} থেকে সেরা ফ্রেশ পণ্যগুলো দেখে নিন! আজই অর্ডার করুন।`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: config.storeName || "ওয়াসিম স্টোর",
+        text: shareText,
+        url: shareUrl,
+      }).catch(console.error);
+    } else {
+      navigator.clipboard.writeText(`${shareText} ${shareUrl}`);
+      setToastMessage("স্টোর লিঙ্ক কপি করা হয়েছে!");
+      setShowToast(true);
     }
   };
 
   const handlePlacePromoOrder = async () => {
     if (!phoneUser) {
-      setToastMessage("অর্ডার করতে প্রথমে লগইন করুন।");
-      setShowToast(true);
       setShowPhoneLogin(true);
       return;
     }
-
-    const amount = Number(promoAmount) || config.promoServiceDefaultAmount || 0;
+    
+    const amount = parseFloat(promoAmount) || parseFloat(config.promoServiceDefaultAmount || "0") || 0;
     if (amount <= 0) {
-      setToastMessage("সঠিক অ্যামাউন্ট দিন");
+      setToastMessage("সঠিক অ্যামাউন্ট লিখুন");
       setShowToast(true);
       return;
     }
 
     setIsPlacingPromoOrder(true);
-    
-    // Automatically try to get location if not already fetched
-    const location = await getUserLocation();
-
     try {
-      // Check block status
-      const customerDoc = await getDoc(doc(db, "customers", phoneUser.phone));
-      if (customerDoc.exists() && customerDoc.data()?.isBlocked) {
-         setToastMessage("আপনি অর্ডার করতে পারবেন না। আপনার অ্যাকাউন্ট ব্লক করা হয়েছে।");
-         setShowToast(true);
-         setIsPlacingPromoOrder(false);
-         return;
-      }
-
-      const orderData = {
+      await addDoc(collection(db, "orders"), {
         customerName: checkoutInfo.name || phoneUser.name,
-        customerPhone: phoneUser.phone,
-        customerAddress: checkoutInfo.address || "ঠিকানা দেওয়া হয়নি",
+        customerPhone: checkoutInfo.phone || phoneUser.phone,
+        customerAddress: checkoutInfo.address || "প্রমোশনাল সার্ভিস",
         items: [{
-          id: "PROMO_SERVICE",
-          name: config.promoServiceTitle || "স্পেশাল সার্ভিস",
+          id: "promo-service",
+          name: config.promoServiceTitle || "প্রমোশনাল সার্ভিস",
           price: amount,
           quantity: 1,
-          category: "Service",
-          unit: "টাকা",
-          image: config.promoServiceImage || "https://picsum.photos/seed/service/200/200"
+          image: config.promoServiceImage || ""
         }],
         totalPrice: amount,
-        status: "pending",
-        paymentMethod: "Cash on Delivery",
-        location,
+        status: 'pending',
+        paymentMethod: promoWallet,
         createdAt: serverTimestamp(),
-        note: `সার্ভিস অর্ডার: ${amount} টাকা`,
-        uid: user?.uid || null,
-        phoneUser: phoneUser?.phone || null
-      };
-
-      await addDoc(collection(db, "orders"), orderData);
-      
-      setToastMessage(config.orderSuccessMsg || "আপনার অর্ডারটি সফল হয়েছে!");
+        isShopSale: false,
+        isWithdrawal: true // Mark as withdrawal
+      });
+      setToastMessage("আপনার সার্ভিস অর্ডারটি গ্রহণ করা হয়েছে!");
       setShowToast(true);
       setShowPromoModal(false);
       setPromoAmount("");
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, "orders/promo", setToastMessage, setShowToast);
+      handleFirestoreError(error, OperationType.CREATE, "orders", setToastMessage, setShowToast);
     } finally {
       setIsPlacingPromoOrder(false);
     }
   };
 
-  const handleUpdateConfig = async () => {
-    try {
-      await setDoc(doc(db, "config", "store"), config);
-      setToastMessage("সেটিংস সেভ হয়েছে!");
+  const handleShopSale = async () => {
+    if (shopCart.length === 0) {
+      setToastMessage("ব্যাগ খালি!");
       setShowToast(true);
-    } catch (error) {
-      console.error("Update config error:", error);
-      setToastMessage("সেটিংস সেভ করতে সমস্যা হয়েছে। সম্ভবত ছবির সাইজ অনেক বড়।");
-      setShowToast(true);
+      return;
     }
-  };
-
-  const handleAddCategory = async () => {
-    if (!newCategoryName.trim()) return;
-    try {
-      await addDoc(collection(db, "categories"), { name: newCategoryName.trim() });
-      setNewCategoryName("");
-    } catch (error) {
-      console.error("Add category error:", error);
-    }
-  };
-
-  const handleDeleteCategory = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, "categories", id));
-      setToastMessage("ক্যাটাগরি মুছে ফেলা হয়েছে।");
-      setShowToast(true);
-    } catch (error) {
-      console.error("Delete category error:", error);
-    }
-  };
-
-  const handleTrackOrder = () => {
-    if (!trackingPhone) return;
-    setIsTrackingActive(true);
-    const found = orders.filter(o => o.customerPhone === trackingPhone);
-    if (found.length === 0) {
-      setToastMessage("এই নাম্বারে কোনো অর্ডার পাওয়া যায়নি।");
-      setShowToast(true);
-    }
-  };
-
-  const getStatusStep = (status: string) => {
-    switch (status) {
-      case 'pending': return 1;
-      case 'confirmed': return 2;
-      case 'shipped': return 3;
-      case 'delivered': return 4;
-      default: return 1;
-    }
-  };
-
-  const statusLabels = [
-    { label: "পেন্ডিং", status: "pending" },
-    { label: "নিশ্চিত", status: "confirmed" },
-    { label: "অন দ্য ওয়ে", status: "shipped" },
-    { label: "ডেলিভারি", status: "delivered" },
-    { label: "বাতিল", status: "cancelled" }
-  ];
-
-  const handleAdminUnlock = () => {
-    const savedPassword = config.adminPassword?.trim();
-    const enteredPassword = passwordInput.trim();
     
-    if (!savedPassword || enteredPassword === savedPassword) {
-      setIsAdminUnlocked(true);
-      setPasswordInput("");
-      setShowPassword(false);
-    } else {
-      setToastMessage("ভুল পাসওয়ার্ড! আবার চেষ্টা করুন।");
+    setIsPlacingShopOrder(true);
+    try {
+      const subtotal = shopCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      let fee = 0;
+      if (shopPaymentMethod === 'bKash' && config.bkashType === 'Personal') {
+        fee = Math.round((subtotal * (config.bkashFeePercentage || 0)) / 100);
+      } else if (shopPaymentMethod === 'Nagad' && config.nagadType === 'Personal') {
+        fee = Math.round((subtotal * (config.nagadFeePercentage || 0)) / 100);
+      } else if (shopPaymentMethod === 'Rocket' && config.rocketType === 'Personal') {
+        fee = Math.round((subtotal * (config.rocketFeePercentage || 0)) / 100);
+      }
+      const total = subtotal + fee + shopDeliveryCharge;
+      const batch = writeBatch(db);
+      
+      // Add Order
+      const orderRef = doc(collection(db, "orders"));
+      batch.set(orderRef, {
+        customerName: shopCustomerName || "দোকান বিক্রি (নগদ)",
+        customerPhone: shopCustomerPhone || "POS",
+        customerAddress: shopCustomerAddress || "In-Store",
+        items: shopCart,
+        subtotal: subtotal,
+        paymentFee: fee,
+        deliveryCharge: shopDeliveryCharge,
+        totalPrice: total,
+        status: 'delivered',
+        paymentMethod: shopPaymentMethod,
+        createdAt: serverTimestamp(),
+        isShopSale: true
+      });
+      
+      // Update inventory for each item
+      shopCart.forEach(item => {
+        const productRef = doc(db, "products", item.id);
+        const originalProduct = products.find(p => p.id === item.id);
+        if (originalProduct) {
+          const currentStock = originalProduct.stockQuantity || 0;
+          const currentSold = originalProduct.soldCount || 0;
+          batch.update(productRef, {
+            stockQuantity: Math.max(0, currentStock - item.quantity),
+            soldCount: currentSold + item.quantity
+          });
+        }
+      });
+      
+      await batch.commit();
+      
+      // Auto-trigger print for shop sales
+      setPrintableOrder({
+        id: orderRef.id,
+        customerName: shopCustomerName || "দোকান বিক্রি (নগদ)",
+        customerPhone: shopCustomerPhone || "POS",
+        customerAddress: shopCustomerAddress || "In-Store",
+        items: [...shopCart],
+        subtotal: subtotal,
+        paymentFee: fee,
+        deliveryCharge: shopDeliveryCharge,
+        totalPrice: total,
+        status: 'delivered',
+        paymentMethod: shopPaymentMethod,
+        createdAt: { toDate: () => new Date() } // Local date for immediate print
+      } as any);
+      setShowPrintMemo(true);
+
+      setShopCart([]);
+      setShopCustomerName("");
+      setShopCustomerPhone("");
+      setShopCustomerAddress("");
+      setShopDeliveryCharge(0);
+      setToastMessage("দোকান বিক্রি সফল হয়েছে!");
       setShowToast(true);
+      setIsPlacingShopOrder(false);
+    } catch (error) {
+       setIsPlacingShopOrder(false);
+       handleFirestoreError(error, OperationType.CREATE, "orders", setToastMessage, setShowToast);
     }
   };
 
-  const handleLogout = async () => {
-    await logout();
-    setIsAdminUnlocked(false);
-    setPasswordInput("");
-    setShowPassword(false);
-  };
+  if (isAppLoading) {
+    return (
+      <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-white">
+        <div className="relative flex flex-col items-center gap-8 px-6 text-center">
+          {config.storeLogo ? (
+            <motion.img 
+              initial={{ scale: 0.5, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              src={config.storeLogo} 
+              alt="Logo" 
+              className="h-32 w-32 object-contain drop-shadow-2xl" 
+            />
+          ) : null}
+          <h2 className="text-4xl font-black text-green-800 tracking-tighter">
+            {config.storeName || "ওয়াসিম স্টোর"}
+          </h2>
+          <div className="flex items-center justify-center gap-2">
+            <div className="h-2 w-2 rounded-full bg-green-600 animate-bounce" />
+            <div className="h-2 w-2 rounded-full bg-green-600 animate-bounce [animation-delay:-0.15s]" />
+            <div className="h-2 w-2 rounded-full bg-green-600 animate-bounce [animation-delay:-0.3s]" />
+          </div>
+          <p className="text-lg font-bold text-green-700 bg-green-50 px-6 py-3 rounded-2xl border border-green-100 animate-pulse">
+            অ্যাপসটি লোডিং হচ্ছে একটু অপেক্ষা করুন
+          </p>
+          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
+            আমরা আপনার অভিজ্ঞতার জন্য সফটওয়্যারটি অটোমেটিক লোডিং করছি
+          </p>
+        </div>
+        
+        <div className="absolute bottom-12 left-0 right-0 text-center">
+          <p className="text-[10px] text-gray-300 font-medium">Wasim Store Delivery Platform</p>
+        </div>
+      </div>
+    );
+  }
 
-  const compressImage = (file: File, maxWidth: number = 800): Promise<string> => {
-    return new Promise((resolve) => {
+  const compressImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = (event) => {
+      reader.onload = (e) => {
         const img = new Image();
-        img.src = event.target?.result as string;
         img.onload = () => {
           const canvas = document.createElement('canvas');
           let width = img.width;
           let height = img.height;
-
-          if (width > maxWidth) {
-            height = (maxWidth / width) * height;
-            width = maxWidth;
+          const maxDim = 800;
+          if (width > height) {
+            if (width > maxDim) {
+              height *= maxDim / width;
+              width = maxDim;
+            }
+          } else {
+            if (height > maxDim) {
+              width *= maxDim / height;
+              height = maxDim;
+            }
           }
-
           canvas.width = width;
           canvas.height = height;
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, width, height);
           resolve(canvas.toDataURL('image/jpeg', 0.7));
         };
+        img.onerror = reject;
+        img.src = e.target?.result as string;
       };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
     });
+  };
+
+  const handleUpdateConfig = async () => {
+    try {
+      await updateDoc(doc(db, "config", "store"), config);
+      setToastMessage("সেটিংস সেভ করা হয়েছে!");
+      setShowToast(true);
+    } catch (error) {
+      console.error("Update config error:", error);
+      handleFirestoreError(error, OperationType.WRITE, "config/store", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleAddCategory = async () => {
+    const name = prompt("ক্যাটাগরির নাম লিখুন:");
+    if (!name || !name.trim()) return;
+    try {
+      await addDoc(collection(db, "categories"), {
+        name: name.trim(),
+        order: categories.length + 1
+      });
+      setToastMessage("ক্যাটাগরি যোগ করা হয়েছে");
+      setShowToast(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, "categories", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    if (!window.confirm("আপনি কি নিশ্চিত যে আপনি এই ক্যাটাগরি মুছে ফেলতে চান?")) return;
+    try {
+      await deleteDoc(doc(db, "categories", id));
+      setToastMessage("ক্যাটাগরি মুছে ফেলা হয়েছে");
+      setShowToast(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, "categories", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleMoveCategory = async (cat: any, direction: 'up' | 'down') => {
+    const currentIndex = categories.findIndex(c => c.id === cat.id);
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= categories.length) return;
+
+    const targetCat = categories[targetIndex];
+    try {
+      await updateDoc(doc(db, "categories", cat.id), { order: targetCat.order });
+      await updateDoc(doc(db, "categories", targetCat.id), { order: cat.order });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, "categories", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleDeleteExpense = async (id: string) => {
+    if (!window.confirm("আপনি কি নিশ্চিত যে আপনি এটি মুছে ফেলতে চান?")) return;
+    try {
+      await deleteDoc(doc(db, "expenses", id));
+      setToastMessage("লেনদেন মুছে ফেলা হয়েছে");
+      setShowToast(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, "expenses", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleDeleteStaff = async (id: string) => {
+    if (!window.confirm("আপনি কি নিশ্চিত যে আপনি এই কর্মীকে মুছে ফেলতে চান?")) return;
+    try {
+      await deleteDoc(doc(db, "staff", id));
+      setToastMessage("কর্মী মুছে ফেলা হয়েছে");
+      setShowToast(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, "staff", setToastMessage, setShowToast);
+    }
+  };
+
+  const handleBlockCustomer = async (phone: string, blockStatus: boolean) => {
+    try {
+      await updateDoc(doc(db, "customers", phone), { isBlocked: blockStatus });
+      setToastMessage(blockStatus ? "কাস্টমারকে ব্লক করা হয়েছে" : "কাস্টমারকে আনব্লক করা হয়েছে");
+      setShowToast(true);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `customers/${phone}`, setToastMessage, setShowToast);
+    }
+  };
+
+  const handleTrackOrder = () => {
+    if (!trackingPhone || trackingPhone.length < 11) {
+      setToastMessage("সঠিক ফোন নাম্বার দিন");
+      setShowToast(true);
+      return;
+    }
+    setIsTrackingActive(true);
   };
 
   const handleImageUpload = async (e: ChangeEvent<HTMLInputElement>, type: 'product' | 'logo' | 'hero' | 'appIcon' | 'promoService' = 'product') => {
@@ -1587,88 +2530,31 @@ export default function App() {
     setToastMessage("ডাইরেক্ট ইন্সটল লিঙ্ক কপি করা হয়েছে!");
     setShowToast(true);
   };
-
-  const handleShareProduct = (product: Product) => {
-    const origin = window.location.origin.replace('ais-dev-', 'ais-pre-');
-    const baseUrl = origin + window.location.pathname;
-    const shareUrl = `${baseUrl}?s&p=${product.id}`;
-    const shareText = `${config.storeName || "ওয়াসিম স্টোর"} থেকে ${product.name} দেখুন! দাম মাত্র ৳${product.price} / ${product.unit}`;
-    
-    if (navigator.share) {
-      navigator.share({
-        title: product.name,
-        text: shareText,
-        url: shareUrl,
-      }).catch(console.error);
-    } else {
-      navigator.clipboard.writeText(`${shareText} ${shareUrl}`);
-      setToastMessage("প্রোডাক্ট লিঙ্ক কপি করা হয়েছে!");
-      setShowToast(true);
-    }
-  };
-
-  const handleShareStore = () => {
-    const origin = window.location.origin.replace('ais-dev-', 'ais-pre-');
-    const baseUrl = origin + window.location.pathname;
-    const shareUrl = `${baseUrl}?s`;
-    const shareText = `${config.storeName || "ওয়াসিম স্টোর"} থেকে সেরা মানের মোদী মাল কিনুন!`;
-    
-    if (navigator.share) {
-      navigator.share({
-        title: config.storeName || "ওয়াসিম স্টোর",
-        text: shareText,
-        url: shareUrl,
-      }).catch(console.error);
-    } else {
-      navigator.clipboard.writeText(`${shareText} ${shareUrl}`);
-      setToastMessage("স্টোর লিঙ্ক কপি করা হয়েছে!");
-      setShowToast(true);
-    }
-  };
-
-  if (isAppLoading) {
-    return (
-      <div className="fixed inset-0 z-[999] bg-white flex flex-col items-center justify-center p-6 text-center">
-        <motion.div
-          animate={{ 
-            rotate: 360,
-            scale: [1, 1.1, 1] 
-          }}
-          transition={{ 
-            rotate: { duration: 2, repeat: Infinity, ease: "linear" },
-            scale: { duration: 1.5, repeat: Infinity }
-          }}
-          className="mb-8 p-4 bg-green-50 rounded-full text-green-600 shadow-xl shadow-green-100"
-        >
-          <Store size={64} />
-        </motion.div>
-        
-        <div className="space-y-4 max-w-sm">
-          <h2 className="text-2xl font-black text-gray-900 leading-tight">
-            ওয়াসিম স্টোর
-          </h2>
-          <div className="flex items-center justify-center gap-2">
-            <div className="h-2 w-2 rounded-full bg-green-600 animate-bounce" />
-            <div className="h-2 w-2 rounded-full bg-green-600 animate-bounce [animation-delay:-0.15s]" />
-            <div className="h-2 w-2 rounded-full bg-green-600 animate-bounce [animation-delay:-0.3s]" />
-          </div>
-          <p className="text-lg font-bold text-green-700 bg-green-50 px-6 py-3 rounded-2xl border border-green-100 animate-pulse">
-            অ্যাপসটি লোডিং হচ্ছে একটু অপেক্ষা করুন
-          </p>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
-            আমরা আপনার অভিজ্ঞতার জন্য সফটওয়্যারটি অটোমেটিক লোডিং করছি
-          </p>
-        </div>
-        
-        <div className="absolute bottom-12 left-0 right-0">
-          <p className="text-[10px] text-gray-300 font-medium">Wasim Store Delivery Platform</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-[#fdfcf8] text-[#2d2d2d] font-sans overflow-x-hidden">
+      {/* Location Access Banner */}
+      <AnimatePresence>
+        {showLocationBanner && isCustomerMode && activeTab !== 'admin' && (
+          <motion.div 
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-green-800 text-white py-2.5 px-4 text-center text-[11px] font-bold flex items-center justify-center gap-4 border-b border-green-900/50 sticky top-0 z-[60] shadow-xl backdrop-blur-md"
+          >
+            <div className="flex items-center gap-2">
+              <div className="h-6 w-6 rounded-full bg-green-700 flex items-center justify-center text-yellow-300">
+                <MapPin size={12} />
+              </div>
+              দ্রুত ডেলিভারির জন্য আপনার বর্তমান লোকেশন শেয়ার করবেন?
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <Button size="sm" onClick={handleLocationAccept} className="bg-white text-green-800 hover:bg-green-50 h-7 px-4 text-[10px] font-black rounded-lg shadow-sm">লোকেশন দিন</Button>
+              <Button size="sm" variant="ghost" onClick={handleLocationDeny} className="text-green-100 hover:bg-green-900 h-7 px-3 text-[10px] font-bold rounded-lg underline">পরে হবে</Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Announcement Bar */}
       <AnimatePresence>
         {config.showAnnouncement && config.announcementText && (
@@ -1746,7 +2632,7 @@ export default function App() {
                   onClick={() => setActiveTab("info")}
                 >
                   <Bell size={22} />
-                  {notifications.length > 0 && (
+                  {visibleNotifications.length > 0 && (
                     <span className="absolute top-2 right-2 flex h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white" />
                   )}
                 </Button>
@@ -1767,30 +2653,32 @@ export default function App() {
             setIsCartOpen(open);
             if (!open) setIsOrderSuccess(false);
           }}>
-            <SheetTrigger
+            <SheetTrigger 
               render={
-                <div className="flex flex-col items-center gap-2">
-                  <Button className="h-20 w-20 rounded-full bg-green-600 hover:bg-green-700 shadow-[0_8px_30px_rgb(22,163,74,0.4)] flex flex-col items-center justify-center gap-1 border-4 border-white">
-                    <motion.div
-                      key={totalItems}
-                      initial={{ scale: 1 }}
-                      animate={{ scale: totalItems > 0 ? [1, 1.2, 1] : 1 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      <ShoppingBasket className="h-8 w-8 text-white" />
-                    </motion.div>
-                    {totalItems > 0 && (
-                      <Badge className="absolute -right-1 -top-1 h-7 w-7 flex items-center justify-center rounded-full bg-red-500 p-0 text-xs font-bold border-2 border-white shadow-lg">
-                        {totalItems}
-                      </Badge>
-                    )}
-                  </Button>
-                  <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-2xl shadow-xl border border-green-100 max-w-[180px] text-center">
-                    <p className="text-[10px] font-bold text-green-800 leading-tight">
-                      আপনার বাছাইকৃত পণ্য এই ব্যাগে যোগ হয়েছে এখানে অর্ডার করুন
-                    </p>
+                <button className="flex flex-col items-center gap-2 outline-none group cursor-pointer focus:ring-0">
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="h-20 w-20 rounded-full bg-green-600 hover:bg-green-700 shadow-[0_8px_30px_rgb(22,163,74,0.4)] flex flex-col items-center justify-center gap-1 border-4 border-white transition-transform group-active:scale-95 relative">
+                      <motion.div
+                        key={totalItems}
+                        initial={{ scale: 1 }}
+                        animate={{ scale: totalItems > 0 ? [1, 1.2, 1] : 1 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        <ShoppingBasket className="h-8 w-8 text-white" />
+                      </motion.div>
+                      {totalItems > 0 && (
+                        <Badge className="absolute -right-1 -top-1 h-7 w-7 flex items-center justify-center rounded-full bg-red-500 p-0 text-xs font-bold border-2 border-white shadow-lg">
+                          {totalItems}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-2xl shadow-xl border border-green-100 max-w-[180px] text-center">
+                      <p className="text-[10px] font-bold text-green-800 leading-tight">
+                        আপনার বাছাইকৃত পণ্য এই ব্যাগে যোগ হয়েছে এখানে অর্ডার করুন
+                      </p>
+                    </div>
                   </div>
-                </div>
+                </button>
               }
             />
             <SheetContent className="w-full sm:max-w-md flex flex-col h-full overflow-y-auto">
@@ -1908,7 +2796,25 @@ export default function App() {
                       <div className="space-y-4 w-full mb-4">
                         <Input placeholder="আপনার নাম" value={checkoutInfo.name} onChange={e => setCheckoutInfo({...checkoutInfo, name: e.target.value})} />
                         <Input placeholder="ফোন নাম্বার" value={checkoutInfo.phone} onChange={e => setCheckoutInfo({...checkoutInfo, phone: e.target.value})} />
-                        <Input placeholder="ঠিকানা" value={checkoutInfo.address} onChange={e => setCheckoutInfo({...checkoutInfo, address: e.target.value})} />
+                        <div className="flex gap-2">
+                          <Input className={config.enableAutoDeliveryCharge ? "flex-[2]" : "w-full"} placeholder="ঠিকানা" value={checkoutInfo.address} onChange={e => setCheckoutInfo({...checkoutInfo, address: e.target.value})} />
+                          {config.enableAutoDeliveryCharge && (
+                            <div className="flex-1 relative">
+                              <Input 
+                                type="number" 
+                                placeholder="ডেলিভারি চার্জ" 
+                                value={checkoutInfo.deliveryCharge} 
+                                onChange={e => setCheckoutInfo({...checkoutInfo, deliveryCharge: Number(e.target.value)})} 
+                                readOnly={config.enableAutoDeliveryCharge}
+                                className={`h-10 ${config.enableAutoDeliveryCharge ? 'bg-amber-50 border-amber-200 text-amber-700 cursor-not-allowed' : ''}`}
+                              />
+                              <span className="absolute -top-3 left-2 bg-white px-1 text-[8px] font-black uppercase text-amber-600">অটো সেট (অপরিবর্তনযোগ্য)</span>
+                              {config.deliveryChargeNotice && (
+                                <p className="text-[10px] text-amber-600 mt-1 leading-tight font-medium">*{config.deliveryChargeNotice}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
                         <div className="flex gap-2">
                           <Button 
                             variant={checkoutInfo.paymentMethod === 'Cash on Delivery' ? 'default' : 'outline'}
@@ -1925,22 +2831,39 @@ export default function App() {
                             className="flex-1 text-xs"
                             onClick={() => setCheckoutInfo({...checkoutInfo, paymentMethod: 'Nagad'})}
                           >Nagad</Button>
+                          <Button 
+                            variant={checkoutInfo.paymentMethod === 'Rocket' ? 'default' : 'outline'}
+                            className="flex-1 text-xs"
+                            onClick={() => setCheckoutInfo({...checkoutInfo, paymentMethod: 'Rocket'})}
+                          >Rocket</Button>
                         </div>
                         {checkoutInfo.paymentMethod !== 'Cash on Delivery' && (
                           <div className="space-y-3 p-4 bg-green-50 rounded-2xl border border-green-100">
                             <p className="text-[10px] text-center text-green-700 font-bold uppercase tracking-wider">
                               {checkoutInfo.paymentMethod} পেমেন্ট নির্দেশিকা
                             </p>
-                            <div className="flex items-center justify-center gap-2 bg-white p-2 rounded-xl border border-green-100">
-                              <span className="text-sm font-black text-green-900">
-                                {checkoutInfo.paymentMethod === 'bKash' ? config.bkashNumber : config.nagadNumber}
-                              </span>
+                            <div className="flex items-center justify-center gap-2 bg-white p-2 rounded-xl border border-green-100 relative group">
+                              <div className="flex flex-col items-center gap-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-black text-green-900">
+                                    {checkoutInfo.paymentMethod === 'bKash' ? config.bkashNumber : checkoutInfo.paymentMethod === 'Nagad' ? config.nagadNumber : config.rocketNumber}
+                                  </span>
+                                  <Badge variant="secondary" className="text-[9px] h-4 px-1.5 bg-green-100 text-green-800 border-none">
+                                    {checkoutInfo.paymentMethod === 'bKash' ? config.bkashType : checkoutInfo.paymentMethod === 'Nagad' ? config.nagadType : config.rocketType}
+                                  </Badge>
+                                </div>
+                                {(checkoutInfo.paymentMethod === 'bKash' ? config.bkashDesc : checkoutInfo.paymentMethod === 'Nagad' ? config.nagadDesc : config.rocketDesc) && (
+                                  <p className="text-[10px] text-muted-foreground font-medium italic">
+                                    {checkoutInfo.paymentMethod === 'bKash' ? config.bkashDesc : checkoutInfo.paymentMethod === 'Nagad' ? config.nagadDesc : config.rocketDesc}
+                                  </p>
+                                )}
+                              </div>
                               <Button 
                                 size="icon" 
                                 variant="ghost" 
-                                className="h-8 w-8 text-green-600 hover:bg-green-50 rounded-full"
+                                className="h-8 w-8 text-green-600 hover:bg-green-50 rounded-full shrink-0"
                                 onClick={() => {
-                                  const num = checkoutInfo.paymentMethod === 'bKash' ? config.bkashNumber : config.nagadNumber;
+                                  const num = checkoutInfo.paymentMethod === 'bKash' ? config.bkashNumber : checkoutInfo.paymentMethod === 'Nagad' ? config.nagadNumber : config.rocketNumber;
                                   navigator.clipboard.writeText(num);
                                   setToastMessage("নাম্বার কপি করা হয়েছে!");
                                   setShowToast(true);
@@ -1988,35 +2911,84 @@ export default function App() {
                                   </Button>
                                 </>
                               )}
+                              {checkoutInfo.paymentMethod === 'Rocket' && (
+                                <>
+                                  <Button 
+                                    size="sm" 
+                                    className="text-[10px] h-9 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold"
+                                    onClick={() => window.open(`https://www.dutchbanglabank.com/rocket/rocket.html`)}
+                                  >
+                                    রকেট অ্যাপ ওপেন
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="text-[10px] h-9 border-purple-200 text-purple-700 rounded-xl"
+                                    onClick={() => window.open(`tel:*322#`)}
+                                  >
+                                    ডায়াল *৩২২#
+                                  </Button>
+                                </>
+                              )}
                             </div>
-                            <div className="pt-2 border-t border-green-100">
-                              <p className="text-[9px] text-center text-green-600 italic">
-                                পেমেন্ট করার পর স্ক্রিনশটটি আমাদের হোয়াটসঅ্যাপে পাঠান।
+                            <div className="pt-2 border-t border-green-100 space-y-2">
+                              <p className="text-[10px] text-center text-green-600 italic">
+                                পেমেন্ট করার পর স্ক্রিনশটটি চ্যাট বক্সে বা হোয়াটসঅ্যাপে পাঠান।
                               </p>
-                              {config.whatsappNumber && (
+                              <div className="flex gap-2">
                                 <Button 
                                   size="sm" 
-                                  variant="link" 
-                                  className="w-full text-[10px] text-green-700 font-bold h-6"
-                                  onClick={() => window.open(`https://wa.me/${config.whatsappNumber.replace(/\D/g, '')}?text=${encodeURIComponent('আসসালামু আলাইকুম, আমি পেমেন্ট করেছি। এই নিন স্ক্রিনশট।')}`)}
+                                  variant="outline"
+                                  className="flex-1 text-[10px] h-8 border-green-200 text-green-700 font-bold rounded-lg"
+                                  onClick={() => {
+                                    setIsCartOpen(false);
+                                    setActiveTab("info");
+                                  }}
                                 >
-                                  স্ক্রিনশট পাঠাতে এখানে ক্লিক করুন
+                                  <MessageCircle size={12} className="mr-1" /> চ্যাটে স্ক্রিনশট পাঠান
                                 </Button>
-                              )}
+                                {config.whatsappNumber && (
+                                  <Button 
+                                    size="sm" 
+                                    className="flex-1 text-[10px] h-8 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg"
+                                    onClick={() => window.open(`https://wa.me/${config.whatsappNumber.replace(/\D/g, '')}?text=${encodeURIComponent('আসসালামু আলাইকুম, আমি পেমেন্ট করেছি। এই নিন স্ক্রিনশট।')}`)}
+                                  >
+                                    <MessageSquare size={12} className="mr-1" /> হোয়াটসঅ্যাপ
+                                  </Button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         )}
                       </div>
-                      <div className="flex w-full items-center justify-between">
-                        <span className="text-muted-foreground">মোট দাম:</span>
-                        <span className="text-xl font-bold text-green-800">৳{totalPrice}</span>
+                      <div className="space-y-2 w-full pt-4 border-t">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">সাবটোটাল:</span>
+                          <span className="font-medium">৳{totalPrice}</span>
+                        </div>
+                        {paymentFee > 0 && (
+                          <div className="flex justify-between text-sm text-pink-600 font-medium">
+                            <span>পেমেন্ট খরচ ({checkoutInfo.paymentMethod === 'bKash' ? config.bkashFeePercentage : checkoutInfo.paymentMethod === 'Nagad' ? config.nagadFeePercentage : config.rocketFeePercentage}%):</span>
+                            <span>+৳{paymentFee}</span>
+                          </div>
+                        )}
+                        {Number(checkoutInfo.deliveryCharge || 0) > 0 && (
+                          <div className="flex justify-between text-sm text-amber-600 font-medium">
+                            <span>ডেলিভারি চার্জ:</span>
+                            <span>+৳{checkoutInfo.deliveryCharge}</span>
+                          </div>
+                        )}
+                        <div className="flex w-full items-center justify-between border-t pt-2 mt-2">
+                          <span className="text-muted-foreground font-bold">মোট দাম:</span>
+                          <span className="text-xl font-black text-green-800">৳{finalTotalWithFee}</span>
+                        </div>
                       </div>
                       <Button 
                         onClick={handlePlaceOrder} 
                         disabled={isPlacingOrder}
                         className="w-full bg-green-600 hover:bg-green-700 text-white h-12 text-lg font-bold"
                       >
-                        {isPlacingOrder ? "অর্ডার হচ্ছে..." : "অর্ডার করুন"}
+                        {isPlacingOrder ? (isFetchingLocation ? "লোকেশন নেওয়া হচ্ছে..." : "অর্ডার হচ্ছে...") : "অর্ডার করুন"}
                         {!isPlacingOrder && <ChevronRight className="ml-2 h-5 w-5" />}
                       </Button>
                     </SheetFooter>
@@ -2288,6 +3260,121 @@ export default function App() {
                     </div>
                   </CardContent>
                 </Card>
+
+                {/* Notifications Section */}
+                {visibleNotifications.length > 0 && (
+                  <div className="space-y-4 pt-4">
+                    <h4 className="font-bold flex items-center gap-2">
+                      <Bell size={20} className="text-amber-500" />
+                      নোটিফিকেশনসমূহ
+                    </h4>
+                    <div className="space-y-3">
+                      {visibleNotifications.map((notif) => (
+                        <Card key={notif.id} className="border-none shadow-sm bg-amber-50 rounded-2xl overflow-hidden relative group">
+                          <CardContent className="p-4 pr-12">
+                            <h5 className="font-bold text-amber-900 text-sm">{notif.title}</h5>
+                            <p className="text-xs text-amber-800/80 mt-1">{notif.message}</p>
+                            <p className="text-[9px] text-amber-600 mt-2">
+                              {notif.createdAt?.toDate ? notif.createdAt.toDate().toLocaleString('bn-BD') : "এখনই"}
+                            </p>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="absolute top-2 right-2 h-8 w-8 text-amber-700 hover:bg-amber-100 rounded-full"
+                              onClick={() => hideNotification(notif.id)}
+                            >
+                              <X size={16} />
+                            </Button>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Customer Orders Section */}
+                <div className="space-y-4 pt-4">
+                  <h4 className="font-bold flex items-center gap-2">
+                    <ListOrdered size={20} className="text-green-600" />
+                    আপনার অর্ডারসমূহ
+                  </h4>
+                  <div className="space-y-4">
+                    {orders.filter(o => o.customerPhone === phoneUser.phone).length === 0 ? (
+                      <Card className="p-12 text-center bg-white rounded-3xl border border-dashed border-gray-100">
+                        <p className="text-gray-400 font-medium">আপনি এখনো কোনো অর্ডার করেননি</p>
+                      </Card>
+                    ) : (
+                      orders
+                        .filter(o => o.customerPhone === phoneUser.phone)
+                        .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))
+                        .map(order => (
+                          <Card key={order.id} className="overflow-hidden border-none shadow-sm bg-white rounded-3xl">
+                            <div className={`h-1.5 w-full ${
+                              order.status === 'pending' ? 'bg-yellow-400' : 
+                              order.status === 'confirmed' ? 'bg-blue-400' : 
+                              order.status === 'shipped' ? 'bg-indigo-400' :
+                              order.status === 'delivered' ? 'bg-green-400' : 'bg-red-500'
+                            }`} />
+                            <CardContent className="p-5">
+                              <div className="flex justify-between items-start mb-4">
+                                <div>
+                                  <Badge className={
+                                    order.status === 'pending' ? 'bg-yellow-50 text-yellow-600 border-yellow-100' : 
+                                    order.status === 'confirmed' ? 'bg-blue-50 text-blue-600 border-blue-100' : 
+                                    order.status === 'shipped' ? 'bg-indigo-50 text-indigo-600 border-indigo-100' :
+                                    order.status === 'delivered' ? 'bg-green-50 text-green-600 border-green-100' : 'bg-red-50 text-red-600 border-red-100'
+                                  }>
+                                    {statusLabels[order.status] || order.status}
+                                  </Badge>
+                                  <p className="text-[10px] text-muted-foreground mt-1">
+                                    ID: {order.id.slice(-6).toUpperCase()} • {order.createdAt?.toDate ? order.createdAt.toDate().toLocaleString('bn-BD') : "অজানা"}
+                                  </p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-lg font-black text-green-700">৳{order.totalPrice}</p>
+                                  <p className="text-[10px] font-bold text-gray-400">{order.items.length}টি পণ্য</p>
+                                </div>
+                              </div>
+                              
+                              <div className="space-y-2 border-t pt-3">
+                                {order.items.map((item, idx) => (
+                                  <div key={idx} className="flex justify-between text-xs">
+                                    <span className="text-gray-600">{item.name} x {item.quantity}</span>
+                                    <span className="font-bold">৳{item.price * item.quantity}</span>
+                                  </div>
+                                ))}
+                              </div>
+
+                              {/* Payment Info for Customer */}
+                              {(order.paymentMethod === 'bKash' || order.paymentMethod === 'Nagad') && order.paymentNumber && (
+                                <div className="mt-3 p-3 bg-gray-50 rounded-2xl border border-gray-100 flex items-center justify-between">
+                                  <div>
+                                    <span className="text-[10px] font-bold text-gray-400 uppercase block">পেমেন্ট নম্বর ({order.paymentMethod})</span>
+                                    <span className="text-sm font-mono font-bold text-gray-700">{order.paymentNumber}</span>
+                                  </div>
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className="h-8 rounded-lg text-green-600 hover:bg-green-100 gap-1.5"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(order.paymentNumber);
+                                      setToastMessage("নম্বর কপি করা হয়েছে");
+                                      setShowToast(true);
+                                    }}
+                                  >
+                                    <Copy size={14} />
+                                    কপি
+                                  </Button>
+                                </div>
+                              )}
+
+
+                            </CardContent>
+                          </Card>
+                        ))
+                    )}
+                  </div>
+                </div>
                 
                 {/* Chat/Support Section */}
                 <div className="space-y-4 pt-4">
@@ -2309,22 +3396,98 @@ export default function App() {
                             .sort((a, b) => (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0))
                             .map((m, i) => (
                               <div key={i} className={`flex ${m.type === 'admin' ? 'justify-start' : 'justify-end'}`}>
-                                <div className={`max-w-[85%] p-3 rounded-2xl text-sm shadow-sm ${
+                                <div className={`max-w-[85%] p-3 rounded-2xl text-sm shadow-sm relative group ${
                                   m.type === 'admin' 
                                     ? 'bg-white border border-green-100 text-gray-800 rounded-tl-none' 
                                     : 'bg-green-600 text-white rounded-tr-none'
                                 }`}>
                                   {m.type === 'admin' && <p className="text-[10px] font-bold mb-1 opacity-70">অ্যাডমিন</p>}
-                                  <p className="leading-relaxed">{m.message}</p>
-                                  <p className="text-[9px] mt-1 opacity-60 text-right">
-                                    {m.createdAt?.toDate ? m.createdAt.toDate().toLocaleTimeString('bn-BD', {hour: '2-digit', minute:'2-digit'}) : "এখনই"}
-                                  </p>
+                                  
+                                  {m.imageUrl && (
+                                    <div className="mb-2 rounded-lg overflow-hidden border border-black/5 bg-black/5">
+                                      <img 
+                                        src={m.imageUrl} 
+                                        alt="Chat Attachment" 
+                                        className="max-w-full h-auto object-contain max-h-[200px]" 
+                                        referrerPolicy="no-referrer"
+                                      />
+                                    </div>
+                                  )}
+
+                                  {editingChatMessageId === m.id ? (
+                                    <div className="space-y-2 py-1">
+                                      <Input 
+                                        value={editingChatMessageText}
+                                        onChange={e => setEditingChatMessageText(e.target.value)}
+                                        className="bg-white/20 border-white/30 text-white placeholder:text-white/50 h-8 text-xs"
+                                        autoFocus
+                                      />
+                                      <div className="flex gap-2">
+                                        <Button 
+                                          size="sm" 
+                                          variant="ghost" 
+                                          className="h-7 text-[10px] bg-white/20 text-white hover:bg-white/30"
+                                          onClick={() => {
+                                            setEditingChatMessageId(null);
+                                            setEditingChatMessageText("");
+                                          }}
+                                        >বাতিল</Button>
+                                        <Button 
+                                          size="sm" 
+                                          className="h-7 text-[10px] bg-white text-green-700 hover:bg-white/90"
+                                          disabled={isUpdatingChatMessage}
+                                          onClick={handleUpdateChatMessage}
+                                        >
+                                          {isUpdatingChatMessage ? "সেভ হচ্ছে..." : "সেভ করুন"}
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <p className="leading-relaxed whitespace-pre-wrap break-words">{m.message}</p>
+                                  )}
+
+                                  {/* Delete/Edit actions for customer messages - Moved below text */}
+                                  {m.type === 'customer' && !editingChatMessageId && (
+                                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-white/20">
+                                      <button 
+                                        onClick={() => {
+                                          setEditingChatMessageId(m.id);
+                                          setEditingChatMessageText(m.message);
+                                        }}
+                                        className="text-[10px] flex items-center gap-1 text-white/90 hover:text-white underline decoration-white/30 underline-offset-2"
+                                      >
+                                        <Edit size={10} /> এডিট
+                                      </button>
+                                      <button 
+                                        onClick={() => handleDeleteMessage(m.id, 'everyone')}
+                                        className="text-[10px] flex items-center gap-1 text-red-100 hover:text-red-200 underline decoration-red-300/50 underline-offset-2"
+                                      >
+                                        <Trash2 size={10} /> মুছুন
+                                      </button>
+                                    </div>
+                                  )}
+                                  
+                                  <div className="flex items-center justify-end gap-1 mt-1 opacity-60">
+                                    {m.updatedAt && <span className="text-[8px] font-bold">(এডিট করা)</span>}
+                                    <p className="text-[9px] text-right">
+                                      {m.createdAt?.toDate ? m.createdAt.toDate().toLocaleTimeString('bn-BD', {hour: '2-digit', minute:'2-digit'}) : "এখনই"}
+                                    </p>
+                                  </div>
                                 </div>
                               </div>
                             ))
                         )}
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 items-center">
+                        <label className="h-12 w-12 bg-gray-100 hover:bg-gray-200 text-gray-500 rounded-xl flex items-center justify-center cursor-pointer transition-colors shadow-inner shrink-0">
+                          <Camera size={20} />
+                          <input 
+                            type="file" 
+                            className="hidden" 
+                            accept="image/*" 
+                            onChange={(e) => handleChatImageUpload(e)} 
+                          />
+                        </label>
                         <Input 
                           placeholder="আপনার সমস্যা বা প্রশ্ন লিখুন..." 
                           value={supportMessage}
@@ -2333,335 +3496,927 @@ export default function App() {
                           onKeyDown={(e) => e.key === 'Enter' && handleSendSupportMessage()}
                         />
                         <Button 
-                          onClick={handleSendSupportMessage} 
-                          disabled={isSendingMessage || !supportMessage.trim()}
+                          onClick={() => handleSendSupportMessage()} 
+                          disabled={isSendingMessage || (!supportMessage.trim() && !isSendingMessage)}
                           className="bg-green-600 hover:bg-green-700 text-white rounded-xl w-12 h-12 shrink-0 p-0"
                         >
                           <Send size={20} />
                         </Button>
-                      </div>
+                        </div>
                     </CardContent>
                   </Card>
                 </div>
-
-                {/* Notifications Section */}
-                <div className="space-y-4">
-                  <h4 className="font-bold flex items-center gap-2">
-                    <Bell size={20} className="text-green-600" />
-                    নোটিফিকেশন বক্স
-                  </h4>
-                  <div className="grid gap-3">
-                    {visibleNotifications.length === 0 ? (
-                      <p className="text-sm text-muted-foreground italic p-4 bg-gray-50 rounded-xl border border-dashed">কোনো নতুন নোটিফিকেশন নেই।</p>
-                    ) : (
-                      visibleNotifications.map(notif => (
-                        <Card key={notif.id} className="border-none shadow-sm bg-white overflow-hidden relative group">
-                          <div className="h-1 w-full bg-green-500" />
-                          <CardContent className="p-4 pr-12">
-                            <h5 className="font-bold text-green-800">{notif.title}</h5>
-                            <p className="text-sm text-gray-600 mt-1">{notif.message}</p>
-                            <p className="text-[10px] text-gray-400 mt-2">
-                              {notif.createdAt?.toDate ? notif.createdAt.toDate().toLocaleString('bn-BD') : "এখনই"}
-                            </p>
-                            <button 
-                              onClick={() => hideNotification(notif.id)}
-                              className="absolute top-4 right-4 p-2 text-gray-400 hover:text-red-500 transition-colors bg-gray-50 rounded-full"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </CardContent>
-                        </Card>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <h4 className="font-bold flex items-center gap-2">
-                    <Package size={20} className="text-green-600" />
-                    আমার অর্ডারসমূহ
-                  </h4>
-                  {customerOrders.length === 0 ? (
-                    <Card className="p-12 text-center text-muted-foreground">
-                      <Package size={48} className="mx-auto mb-4 opacity-20" />
-                      <p>আপনার কোনো অর্ডার পাওয়া যায়নি।</p>
-                      <Button variant="link" onClick={() => setActiveTab("home")} className="mt-2 text-green-700">কেনাকাটা শুরু করুন</Button>
-                    </Card>
-                  ) : (
-                    <div className="grid gap-4">
-                      {customerOrders.map(order => (
-                        <Card key={order.id} className="overflow-hidden border-none shadow-sm">
-                          <div className={`h-1 w-full ${
-                            order.status === 'pending' ? 'bg-yellow-400' : 
-                            order.status === 'confirmed' ? 'bg-blue-400' : 
-                            order.status === 'delivered' ? 'bg-green-400' : 'bg-red-400'
-                          }`} />
-                          <CardContent className="p-6">
-                            <div className="flex flex-col md:flex-row justify-between gap-4">
-                              <div className="space-y-1">
-                                <div className="flex items-center gap-2 mb-2">
-                                  <Badge variant="secondary" className="text-[10px] uppercase font-bold">
-                                    {statusLabels.find(s => s.status === order.status)?.label || order.status}
-                                  </Badge>
-                                  <span className="text-[10px] text-muted-foreground">
-                                    {order.createdAt?.toDate ? order.createdAt.toDate().toLocaleDateString('bn-BD') : "এখনই"}
-                                  </span>
-                                </div>
-                                <h4 className="font-bold text-lg">অর্ডার আইডি: #{order.id.slice(-6).toUpperCase()}</h4>
-                                <p className="text-sm text-muted-foreground">মোট মূল্য: <span className="text-green-700 font-bold">৳{order.totalPrice}</span></p>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                {order.items.map((item, idx) => {
-                                  const productInfo = products.find(p => p.id === item.id);
-                                  return (
-                                    <div key={idx} className="flex items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100">
-                                      <img 
-                                        src={item.image || productInfo?.image || "https://picsum.photos/seed/product/100/100"} 
-                                        className="h-8 w-8 object-cover rounded" 
-                                        alt="" 
-                                        referrerPolicy="no-referrer"
-                                      />
-                                      <span className="text-xs font-medium">{item.name} x {item.quantity}</span>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
-                  )}
-                </div>
               </div>
             ) : (
-              <div className="space-y-8">
-                <Card className="p-8 text-center bg-white shadow-xl border-none rounded-3xl">
-                  <PackageSearch size={48} className="mx-auto mb-4 text-green-600" />
-                  <h3 className="text-xl font-bold mb-2">অর্ডার ট্র্যাকিং</h3>
-                  <p className="text-sm text-muted-foreground mb-6">আপনার ফোন নম্বর দিয়ে লগইন করে সব অর্ডারের আপডেট জানুন।</p>
-                  <Button onClick={() => setShowPhoneLogin(true)} className="bg-green-600 hover:bg-green-700 text-white font-bold h-12 px-8 rounded-xl shadow-lg shadow-green-100">
-                    লগইন করুন
-                  </Button>
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <Card className="p-12 shadow-sm border-none bg-white rounded-3xl w-full max-w-md">
+                   <UserIcon size={64} className="mx-auto mb-6 text-gray-200" />
+                   <h3 className="text-2xl font-black text-gray-800 mb-2">প্রোফাইল দেখতে লগইন করুন</h3>
+                   <p className="text-sm text-muted-foreground mb-8">আপনার অর্ডার ইতিহাস এবং প্রোফাইল তথ্য পেতে লগইন করা প্রয়োজন।</p>
+                   <Button 
+                     onClick={() => setShowPhoneLogin(true)} 
+                     className="w-full bg-green-600 hover:bg-green-700 text-white font-bold h-14 rounded-2xl"
+                   >
+                     লগইন করুন
+                   </Button>
                 </Card>
-
-                <Card className="rounded-3xl border-none shadow-lg overflow-hidden">
-                  <div className="bg-green-700 p-8 text-white">
-                    <h3 className="text-2xl font-bold mb-2">কিভাবে মোবাইলে ইন্সটল করবেন?</h3>
-                    <p className="opacity-80">আপনার মোবাইলে অ্যাপের মতো ব্যবহার করতে নিচের ধাপগুলো অনুসরণ করুন:</p>
-                  </div>
-                  <CardContent className="p-8 space-y-6">
-                    <div className="flex gap-4">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-100 text-green-700 font-bold">১</div>
-                      <div>
-                        <h4 className="font-bold mb-1">ব্রাউজারে ওপেন করুন</h4>
-                        <p className="text-sm text-muted-foreground">আপনার মোবাইলের Chrome (Android) বা Safari (iPhone) ব্রাউজারে লিঙ্কটি ওপেন করুন।</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-4">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-100 text-green-700 font-bold">২</div>
-                      <div>
-                        <h4 className="font-bold mb-1">মেনু বাটনে ক্লিক করুন</h4>
-                        <p className="text-sm text-muted-foreground">Chrome-এ উপরে ডানদিকে তিনটি ডট (⋮) অথবা Safari-তে নিচে শেয়ার (Share) বাটনে ক্লিক করুন।</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-4">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-100 text-green-700 font-bold">৩</div>
-                      <div>
-                        <h4 className="font-bold mb-1">Add to Home Screen</h4>
-                        <p className="text-sm text-muted-foreground">সেখান থেকে "Add to Home Screen" অপশনটি সিলেক্ট করুন। এখন আপনার মোবাইলের হোম স্ক্রিনে অ্যাপের আইকন চলে আসবে।</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {showInstallButton && (
-                  <div className="mt-12 p-8 rounded-[32px] bg-amber-50 border border-amber-100 text-center">
-                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white text-amber-600 shadow-sm">
-                      <Download size={32} />
-                    </div>
-                    <h3 className="text-xl font-bold text-amber-900 mb-2">{config.storeName || "ওয়াসিম স্টোর"} অ্যাপ ইন্সটল করুন</h3>
-                    <p className="text-sm text-amber-700 opacity-80 mb-6">এক ক্লিকে কেনাকাটা করতে এবং অর্ডারের আপডেট পেতে অ্যাপটি ফোনে সেভ করুন।</p>
-                    <Button 
-                      onClick={handleInstallApp}
-                      className="bg-amber-500 hover:bg-amber-600 text-white font-bold px-10 py-6 rounded-2xl shadow-lg"
-                    >
-                      <Download className="mr-2 h-5 w-5" />
-                      {config.storeName || "ওয়াসিম স্টোর"} অ্যাপ ইন্সটল করুন
-                    </Button>
-                  </div>
-                )}
               </div>
             )}
           </div>
         )}
 
         {activeTab === "admin" && (
-          <div className="max-w-4xl mx-auto space-y-8">
-            <div className="flex items-center justify-between mb-4">
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => setActiveTab("home")}
-                className="text-green-700 hover:bg-green-50 rounded-xl"
-              >
-                <ArrowLeft size={18} className="mr-2" />
-                হোমপেজে ফিরে যান
-              </Button>
-            </div>
-            {!user ? (
-              <Card className="p-12 text-center">
-                <h3 className="text-2xl font-bold mb-4">অ্যাডমিন লগইন</h3>
-                <Button onClick={loginWithGoogle} className="bg-green-600">
-                  Google দিয়ে লগইন করুন
-                </Button>
-              </Card>
-            ) : !isAdmin ? (
-              <Card className="p-12 text-center text-red-500">
-                <p className="mb-2">আপনি অ্যাডমিন নন।</p>
-                <p className="text-sm text-gray-500 mb-4">লগইন ইমেইল: {user.email}</p>
-                <Button variant="link" onClick={handleLogout}>লগআউট</Button>
-              </Card>
-            ) : !isAdminUnlocked && config.adminPassword && config.adminPassword.trim() !== "" ? (
-              <Card className="mx-auto max-w-md p-8 border-none shadow-2xl bg-white/80 backdrop-blur-xl">
-                <CardHeader className="p-0 mb-6 text-center">
-                  <div className="mx-auto w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
-                    <LogIn className="text-green-700" size={32} />
+          <div className="max-w-5xl mx-auto space-y-8">
+            {(isAdmin || isAdminUnlocked) ? (
+              <div className="space-y-8">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex flex-col">
+                    <h2 className="text-2xl font-black text-gray-800">অ্যাডমিন কন্ট্রোল</h2>
+                    <p className="text-sm text-muted-foreground font-medium">ওয়াসিম স্টোর ম্যানেজমেন্ট</p>
                   </div>
-                  <CardTitle className="text-2xl font-bold text-gray-800">নিরাপত্তা যাচাই</CardTitle>
-                  <p className="text-sm text-muted-foreground mt-2">অ্যাডমিন প্যানেলে প্রবেশের জন্য পাসওয়ার্ড দিন।</p>
-                </CardHeader>
-                <CardContent className="p-0 space-y-4">
-                  <div className="relative">
-                    <Input 
-                      type={showPassword ? "text" : "password"} 
-                      placeholder="পাসওয়ার্ড লিখুন" 
-                      className="pr-10 h-12 rounded-xl border-gray-200 focus:ring-green-500"
-                      value={passwordInput} 
-                      onChange={e => setPasswordInput(e.target.value)} 
-                      onKeyDown={e => e.key === 'Enter' && handleAdminUnlock()}
-                    />
-                    <button 
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-green-600 transition-colors"
-                    >
-                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
-                  </div>
-                  <Button onClick={handleAdminUnlock} className="w-full h-12 bg-green-600 hover:bg-green-700 rounded-xl font-bold shadow-lg shadow-green-200 transition-all active:scale-95">
-                    প্রবেশ করুন
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : (
-              <>
-                <div className="flex items-center justify-between">
-                  <h3 className="text-2xl font-bold">অ্যাডমিন প্যানেল</h3>
-                  <Button variant="outline" onClick={handleLogout}>লগআউট</Button>
-                </div>
-
-                {/* Admin Tabs */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-hide">
-                  {[
-                    { id: 'supports', label: 'মেসেজ', icon: MessageSquare },
-                    { id: 'orders', label: 'অর্ডারসমূহ', icon: ListOrdered },
-                    { id: 'products', label: 'পণ্যসমূহ', icon: Package },
-                    { id: 'users', label: 'কাস্টমার', icon: UserIcon },
-                    { id: 'settings', label: 'সেটিংস', icon: Settings }
-                  ].map(tab => (
-                    <Button
-                      key={tab.id}
-                      variant={adminSubTab === tab.id ? "default" : "outline"}
-                      onClick={() => setAdminSubTab(tab.id as any)}
-                      className={`rounded-xl flex items-center gap-2 h-11 shrink-0 ${
-                        adminSubTab === tab.id ? "bg-green-700 hover:bg-green-800 shadow-md" : "border-green-100 text-green-700 hover:bg-green-50"
-                      }`}
-                    >
-                      <tab.icon size={18} />
-                      <span className="text-sm font-bold">{tab.label}</span>
+                  <div className="flex items-center gap-2">
+                    <div className="hidden md:flex flex-col items-end mr-2">
+                      <p className="text-xs font-bold text-gray-800">{user?.displayName || "Admin"}</p>
+                      <p className="text-[10px] text-gray-500">{user?.email || "Unlocked via Password"}</p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={handleAdminLogout} className="rounded-full h-10 px-4 gap-2 border-red-100 text-red-600 hover:bg-red-50">
+                      <LogOut size={16} /> বের হয়ে যান
                     </Button>
-                  ))}
+                  </div>
                 </div>
 
-                {adminSubTab === "orders" && (
+                <div className="bg-white p-2 rounded-[28px] shadow-sm border border-gray-100 flex items-center gap-1 overflow-x-auto scrollbar-hide">
+              <Button 
+                variant={adminSubTab === "supports" ? "default" : "ghost"} 
+                onClick={() => setAdminSubTab("supports")}
+                className={`rounded-2xl px-6 h-12 font-bold transition-all ${adminSubTab === "supports" ? "bg-green-700 text-white shadow-lg shadow-green-100" : "text-gray-500 hover:bg-green-50 hover:text-green-700"}`}
+              >
+                <MessageSquare size={18} className="mr-2" /> সাপোর্ট
+              </Button>
+              <Button 
+                variant={adminSubTab === "orders" ? "default" : "ghost"} 
+                onClick={() => setAdminSubTab("orders")}
+                className={`rounded-2xl px-6 h-12 font-bold transition-all ${adminSubTab === "orders" ? "bg-green-700 text-white shadow-lg shadow-green-100" : "text-gray-500 hover:bg-green-50 hover:text-green-700"}`}
+              >
+                <ListOrdered size={18} className="mr-2" /> অনলাইন অর্ডার
+              </Button>
+              <Button 
+                variant={adminSubTab === "dashboard" ? "default" : "ghost"} 
+                onClick={() => setAdminSubTab("dashboard")}
+                className={`rounded-2xl px-6 h-12 font-bold transition-all ${adminSubTab === "dashboard" ? "bg-green-700 text-white shadow-lg shadow-green-100" : "text-gray-500 hover:bg-green-50 hover:text-green-700"}`}
+              >
+                <TrendingUp size={18} className="mr-2" /> সারসংক্ষেপ
+              </Button>
+              <Button 
+                variant={adminSubTab === "pos" ? "default" : "ghost"} 
+                onClick={() => setAdminSubTab("pos")}
+                className={`rounded-2xl px-6 h-12 font-bold transition-all ${adminSubTab === "pos" ? "bg-green-700 text-white shadow-lg shadow-green-100" : "text-gray-500 hover:bg-green-50 hover:text-green-700"}`}
+              >
+                <Store size={18} className="mr-2" /> দোকান বিক্রয় (POS)
+              </Button>
+              <Button 
+                variant={adminSubTab === "expenses" ? "default" : "ghost"} 
+                onClick={() => setAdminSubTab("expenses")}
+                className={`rounded-2xl px-6 h-12 font-bold transition-all ${adminSubTab === "expenses" ? "bg-green-700 text-white shadow-lg shadow-green-100" : "text-gray-500 hover:bg-green-50 hover:text-green-700"}`}
+              >
+                <Wallet size={18} className="mr-2" /> আয়-ব্যয় (Accounts)
+              </Button>
+              <Button 
+                variant={adminSubTab === "staff" ? "default" : "ghost"} 
+                onClick={() => setAdminSubTab("staff")}
+                className={`rounded-2xl px-6 h-12 font-bold transition-all ${adminSubTab === "staff" ? "bg-green-700 text-white shadow-lg shadow-green-100" : "text-gray-500 hover:bg-green-50 hover:text-green-700"}`}
+              >
+                <Users size={18} className="mr-2" /> কর্মী ও রাইডার
+              </Button>
+              <Button 
+                variant={adminSubTab === "products" ? "default" : "ghost"} 
+                onClick={() => setAdminSubTab("products")}
+                className={`rounded-2xl px-6 h-12 font-bold transition-all ${adminSubTab === "products" ? "bg-green-700 text-white shadow-lg shadow-green-100" : "text-gray-500 hover:bg-green-50 hover:text-green-700"}`}
+              >
+                <Package size={18} className="mr-2" /> প্রোডাক্ট
+              </Button>
+              <Button 
+                variant={adminSubTab === "users" ? "default" : "ghost"} 
+                onClick={() => setAdminSubTab("users")}
+                className={`rounded-2xl px-6 h-12 font-bold transition-all ${adminSubTab === "users" ? "bg-green-700 text-white shadow-lg shadow-green-100" : "text-gray-500 hover:bg-green-50 hover:text-green-700"}`}
+              >
+                <UserIcon size={18} className="mr-2" /> কাস্টমার
+              </Button>
+              <Button 
+                variant={adminSubTab === "settings" ? "default" : "ghost"} 
+                onClick={() => setAdminSubTab("settings")}
+                className={`rounded-2xl px-6 h-12 font-bold transition-all ${adminSubTab === "settings" ? "bg-green-700 text-white shadow-lg shadow-green-100" : "text-gray-500 hover:bg-green-50 hover:text-green-700"}`}
+              >
+                <Settings size={18} className="mr-2" /> সেটিংস
+              </Button>
+
+            </div>
+
+            {adminSubTab === "dashboard" && (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <h3 className="text-xl font-bold flex items-center gap-2">
+                    <TrendingUp className="text-green-700" /> ব্যবসায়িক সারসংক্ষেপ
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => setAdminSubTab("supports")}
+                      className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100 rounded-full flex items-center gap-2 font-bold"
+                    >
+                      <MessageSquare size={16} /> সাপোর্ট
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => setAdminSubTab("orders")}
+                      className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100 rounded-full flex items-center gap-2 font-bold"
+                    >
+                      <ListOrdered size={16} /> অনলাইন অর্ডার
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {/* Total Sales */}
+                  <Card className="bg-green-50 border-green-100 shadow-sm flex flex-col justify-between overflow-hidden">
+                    <CardContent className="p-4 lowercase">
+                      <div className="flex items-center gap-4 mb-3">
+                        <div className="h-10 w-10 rounded-full bg-green-600 flex items-center justify-center text-white shrink-0">
+                          <ShoppingBag size={20} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase font-bold text-green-700 leading-tight">পণ্য বিক্রি (Total)</p>
+                          <p className="text-xl font-black text-green-900">৳{salesSummary.total}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2 pt-3 border-t border-green-100">
+                        <div>
+                          <p className="text-[9px] uppercase font-bold text-gray-500">আজকের বিক্রি</p>
+                          <p className="text-sm font-black text-green-700">৳{salesSummary.totalToday}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[9px] uppercase font-bold text-gray-500">এই মাসের বিক্রি</p>
+                          <p className="text-sm font-black text-green-700">৳{salesSummary.totalMonthly}</p>
+                        </div>
+                      </div>
+                    </CardContent>
+                    <CardFooter className="p-2 pt-0">
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={handleClearOrders}
+                        className="w-full text-[10px] h-7 bg-red-50 text-red-600 hover:bg-red-100 font-bold rounded-lg border border-red-100"
+                      >
+                        <Trash2 size={12} className="mr-1" /> ইতিহাস মুছুন
+                      </Button>
+                    </CardFooter>
+                  </Card>
+
+                  {/* Withdrawal Summary */}
+                  <Card className="bg-orange-50 border-orange-100 shadow-sm flex flex-col justify-between overflow-hidden">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-4 mb-3">
+                        <div className="h-10 w-10 rounded-full bg-orange-600 flex items-center justify-center text-white shrink-0">
+                          <ArrowDownLeft size={20} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase font-bold text-orange-700 leading-tight">কাস্টমার উত্তোলন</p>
+                          <p className="text-xl font-black text-orange-900">৳{salesSummary.withdrawalTotal}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2 pt-3 border-t border-orange-100">
+                        <div>
+                          <p className="text-[9px] uppercase font-bold text-gray-500">আজকের উত্তোলন</p>
+                          <p className="text-sm font-black text-orange-700">৳{salesSummary.withdrawalToday}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[9px] uppercase font-bold text-gray-500">এই মাসের উত্তোলন</p>
+                          <p className="text-sm font-black text-orange-700">৳{salesSummary.withdrawalMonthly}</p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Profit */}
+                  <Card className="bg-indigo-50 border-indigo-100 shadow-sm flex flex-col justify-between overflow-hidden">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-4 mb-4">
+                        <div className="h-10 w-10 rounded-full bg-indigo-600 flex items-center justify-center text-white shrink-0">
+                          <TrendingUp size={20} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase font-bold text-indigo-700 leading-tight">আজকের লাভ</p>
+                          <p className="text-xl font-black text-indigo-900">৳{salesSummary.todayProfit}</p>
+                        </div>
+                      </div>
+                      <div className="pt-3 border-t border-indigo-100 flex justify-between items-center">
+                        <p className="text-[10px] uppercase font-bold text-gray-500">এই মাসের লাভ</p>
+                        <p className="text-sm font-black text-indigo-700">৳{salesSummary.monthProfit}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Expenses */}
+                  <Card className="bg-red-50 border-red-100 shadow-sm">
+                    <CardContent className="p-4 flex items-center gap-4">
+                      <div className="h-10 w-10 rounded-full bg-red-600 flex items-center justify-center text-white">
+                        <Wallet size={20} />
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase font-bold text-red-700 leading-tight">মোট ব্যয়</p>
+                        <p className="text-xl font-black text-red-900">৳{salesSummary.totalExpenses}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                  
+                  {/* Damaged Goods */}
+                  <Card className="bg-rose-50 border-rose-100 shadow-sm flex flex-col justify-between overflow-hidden">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-4 mb-3">
+                        <div className="h-10 w-10 rounded-full bg-rose-600 flex items-center justify-center text-white shrink-0">
+                          <PackageSearch size={20} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase font-bold text-rose-700 leading-tight">নষ্ট/খারাপ পণ্য</p>
+                          <p className="text-xl font-black text-rose-900">৳{salesSummary.damagedValue}</p>
+                        </div>
+                      </div>
+                      <div className="pt-3 border-t border-rose-100 flex justify-between items-center">
+                        <p className="text-[10px] uppercase font-bold text-gray-500">মোট পরিমাণ</p>
+                        <p className="text-sm font-black text-rose-700">{salesSummary.damagedCountTotal} টি</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Staff Count */}
+                  <Card className="bg-orange-50 border-orange-100 shadow-sm">
+                    <CardContent className="p-4 flex items-center gap-4">
+                      <div className="h-10 w-10 rounded-full bg-orange-600 flex items-center justify-center text-white">
+                        <Users size={20} />
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase font-bold text-orange-700 leading-tight">কর্মী / রাইডার</p>
+                        <p className="text-xl font-black text-orange-900">{staff.length} জন</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Cash Sales - RESTORED */}
+                  <Card className="bg-amber-50 border-amber-100 shadow-sm bg-gradient-to-br from-amber-50 to-orange-50">
+                    <CardContent className="p-4 flex items-center gap-4">
+                      <div className="h-10 w-10 rounded-full bg-amber-600 flex items-center justify-center text-white">
+                        <Store size={20} />
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase font-bold text-amber-700 leading-tight">নগদ বিক্রি (Cash)</p>
+                        <p className="text-xl font-black text-amber-900">৳{salesSummary.cash}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Online Sales - RESTORED */}
+                  <Card className="bg-blue-50 border-blue-100 shadow-sm bg-gradient-to-br from-blue-50 to-indigo-50 flex flex-col justify-between overflow-hidden">
+                    <CardContent className="p-4 flex items-center gap-4">
+                      <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center text-white">
+                        <Phone size={20} />
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase font-bold text-blue-700 leading-tight">অনলাইন বিক্রি (Total)</p>
+                        <p className="text-xl font-black text-blue-900">৳{salesSummary.online}</p>
+                      </div>
+                    </CardContent>
+                    <CardFooter className="p-2 pt-0">
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={handleClearOnlineOrders}
+                        className="w-full text-[10px] h-7 bg-red-50 text-red-600 hover:bg-red-100 font-bold rounded-lg border border-red-100"
+                      >
+                        <Trash2 size={12} className="mr-1" /> তথ্য মুছুন
+                      </Button>
+                    </CardFooter>
+                  </Card>
+
+                  {/* Investment */}
+                  <Card className="bg-purple-50 border-purple-100 shadow-sm flex flex-col justify-between overflow-hidden">
+                    <CardContent className="p-4 flex items-center gap-4">
+                      <div className="h-10 w-10 rounded-full bg-purple-600 flex items-center justify-center text-white">
+                        <PiggyBank size={20} />
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] uppercase font-bold text-purple-700 leading-tight">ইন্ভেস্টমেন্ট (পুঁজি)</p>
+                          <div className="flex items-center gap-0.5">
+                            <Button size="icon" variant="ghost" className="h-6 w-6 text-purple-600 rounded-full" onClick={() => setAdminSubTab('settings')}><Edit size={12} /></Button>
+                          </div>
+                        </div>
+                        <p className="text-xl font-black text-purple-900 leading-none mt-1">৳{salesSummary.totalInvestment}</p>
+                      </div>
+                    </CardContent>
+                    <CardFooter className="p-2 pt-0">
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={handleResetInvestment}
+                        className="w-full text-[10px] h-7 bg-red-50 text-red-600 hover:bg-red-100 font-bold rounded-lg border border-red-100"
+                      >
+                        <Trash2 size={12} className="mr-1" /> তথ্য মুছুন
+                      </Button>
+                    </CardFooter>
+                  </Card>
+
+                  {/* Stock Value */}
+                  <Card className="bg-cyan-50 border-cyan-100 shadow-sm flex flex-col justify-between overflow-hidden">
+                    <CardContent className="p-4 flex items-center gap-4">
+                      <div className="h-10 w-10 rounded-full bg-cyan-600 flex items-center justify-center text-white">
+                        <Package size={20} />
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase font-bold text-cyan-700 leading-tight">স্টক মাল (বাকি মাল)</p>
+                        <p className="text-xl font-black text-cyan-900">৳{salesSummary.currentStockValue}</p>
+                      </div>
+                    </CardContent>
+                    <CardFooter className="p-2 pt-0">
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={handleResetStock}
+                        className="w-full text-[10px] h-7 bg-red-50 text-red-600 hover:bg-red-100 font-bold rounded-lg border border-red-100"
+                      >
+                        <Trash2 size={12} className="mr-1" /> তথ্য মুছুন
+                      </Button>
+                    </CardFooter>
+                  </Card>
+                </div>
+
+                <div className="space-y-4">
+                  <h4 className="font-black text-lg text-gray-800 border-l-4 border-blue-600 pl-3">অনলাইন পেমেন্ট হিস্টোরি (মার্কেট পেমেন্ট)</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {/* bKash */}
+                    <Card className="bg-white border-pink-100 shadow-sm border-t-4 border-t-pink-600 overflow-hidden">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between mb-4">
+                          <div>
+                            <p className="text-xs font-bold text-pink-700 uppercase">বিকাশ (bKash)</p>
+                            <p className="text-2xl font-black text-pink-900 leading-none mt-1">৳{salesSummary.bkashTotal}</p>
+                          </div>
+                          <div className="flex flex-col gap-2 shrink-0">
+                            <div className="h-10 w-10 rounded-xl bg-pink-50 flex items-center justify-center text-pink-600">
+                              <Wallet size={20} />
+                            </div>
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={() => handleClearWalletOrders('bKash')}
+                              className="h-8 w-8 rounded-lg text-red-500 hover:bg-red-50"
+                            >
+                              <Trash2 size={14} />
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 pt-3 border-t border-pink-50">
+                          <div>
+                            <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">আজকের</p>
+                            <p className="text-sm font-black text-pink-700">৳{salesSummary.bkashToday}</p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">এই মাসের</p>
+                            <p className="text-sm font-black text-pink-700">৳{salesSummary.bkashMonthly}</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* Nagad */}
+                    <Card className="bg-white border-orange-100 shadow-sm border-t-4 border-t-orange-600 overflow-hidden">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between mb-4">
+                          <div>
+                            <p className="text-xs font-bold text-orange-700 uppercase">নগদ (Nagad)</p>
+                            <p className="text-2xl font-black text-orange-900 leading-none mt-1">৳{salesSummary.nagadTotal}</p>
+                          </div>
+                          <div className="flex flex-col gap-2 shrink-0">
+                            <div className="h-10 w-10 rounded-xl bg-orange-50 flex items-center justify-center text-orange-600">
+                              <Wallet size={20} />
+                            </div>
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={() => handleClearWalletOrders('Nagad')}
+                              className="h-8 w-8 rounded-lg text-red-500 hover:bg-red-50"
+                            >
+                              <Trash2 size={14} />
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 pt-3 border-t border-orange-50">
+                          <div>
+                            <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">আজকের</p>
+                            <p className="text-sm font-black text-orange-700">৳{salesSummary.nagadToday}</p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">এই মাসের</p>
+                            <p className="text-sm font-black text-orange-700">৳{salesSummary.nagadMonthly}</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* Bank Transfer */}
+                    <Card className="bg-white border-blue-100 shadow-sm border-t-4 border-t-blue-600 overflow-hidden">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between mb-4">
+                          <div>
+                            <p className="text-xs font-bold text-blue-700 uppercase">ব্যাংক (Bank/Other)</p>
+                            <p className="text-2xl font-black text-blue-900 leading-none mt-1">৳{salesSummary.bankTotal}</p>
+                          </div>
+                          <div className="flex flex-col gap-2 shrink-0">
+                            <div className="h-10 w-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
+                              <Home size={20} />
+                            </div>
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={() => handleClearWalletOrders('Bank Transfer')}
+                              className="h-8 w-8 rounded-lg text-red-500 hover:bg-red-50"
+                            >
+                              <Trash2 size={14} />
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 pt-3 border-t border-blue-50">
+                          <div>
+                            <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">আজকের</p>
+                            <p className="text-sm font-black text-blue-700">৳{salesSummary.bankToday}</p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">এই মাসের</p>
+                            <p className="text-sm font-black text-blue-700">৳{salesSummary.bankMonthly}</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* Rocket */}
+                    <Card className="bg-white border-purple-100 shadow-sm border-t-4 border-t-purple-600 overflow-hidden">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between mb-4">
+                          <div>
+                            <p className="text-xs font-bold text-purple-700 uppercase">রকেট (Rocket)</p>
+                            <p className="text-2xl font-black text-purple-900 leading-none mt-1">৳{salesSummary.rocketTotal}</p>
+                          </div>
+                          <div className="flex flex-col gap-2 shrink-0">
+                            <div className="h-10 w-10 rounded-xl bg-purple-50 flex items-center justify-center text-purple-600">
+                              <Wallet size={20} />
+                            </div>
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={() => handleClearWalletOrders('Rocket')}
+                              className="h-8 w-8 rounded-lg text-red-500 hover:bg-red-50"
+                            >
+                              <Trash2 size={14} />
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 pt-3 border-t border-purple-50">
+                          <div>
+                            <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">আজকের</p>
+                            <p className="text-sm font-black text-purple-700">৳{salesSummary.rocketToday}</p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">এই মাসের</p>
+                            <p className="text-sm font-black text-purple-700">৳{salesSummary.rocketMonthly}</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Existing Subtabs follow... */}
+
+            {adminSubTab === "pos" && (
+              <div className="space-y-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  {/* Product Selection */}
+                  <Card className="border-none shadow-sm rounded-3xl overflow-hidden h-[650px] flex flex-col">
+                    <CardHeader className="bg-green-700 text-white p-6 shrink-0 space-y-4">
+                      <CardTitle className="text-xl font-black flex items-center gap-2">
+                        <Package size={24} />
+                        পণ্য নির্বাচন করুন
+                      </CardTitle>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-green-200" size={18} />
+                        <Input 
+                          placeholder="পণ্য খুঁজুন..." 
+                          className="pl-10 bg-green-800/50 border-green-600 text-white placeholder:text-green-300 focus:ring-green-400"
+                          value={shopSearchQuery}
+                          onChange={e => setShopSearchQuery(e.target.value)}
+                        />
+                      </div>
+                      {/* POS Category Filter */}
+                      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                        <Button 
+                          size="sm"
+                          variant={shopSelectedCategory === "সব" ? "secondary" : "ghost"}
+                          onClick={() => setShopSelectedCategory("সব")}
+                          className={`rounded-full px-4 h-8 text-[10px] uppercase font-bold shrink-0 ${shopSelectedCategory === "সব" ? "bg-white text-green-700" : "text-green-100 hover:bg-green-600"}`}
+                        >সব ক্যাটালগ</Button>
+                        {categories.map(cat => (
+                          <Button 
+                            key={cat.id}
+                            size="sm"
+                            variant={shopSelectedCategory === cat.name ? "secondary" : "ghost"}
+                            onClick={() => setShopSelectedCategory(cat.name)}
+                            className={`rounded-full px-4 h-8 text-[10px] uppercase font-bold shrink-0 ${shopSelectedCategory === cat.name ? "bg-white text-green-700" : "text-green-100 hover:bg-green-600"}`}
+                          >{cat.name}</Button>
+                        ))}
+                      </div>
+                    </CardHeader>
+                    <CardContent className="p-0 overflow-y-auto flex-1">
+                      <div className="divide-y divide-gray-100">
+                        {products
+                          .filter(p => !p.isArchived)
+                          .filter(p => p.name.toLowerCase().includes(shopSearchQuery.toLowerCase()))
+                          .filter(p => shopSelectedCategory === "সব" || p.category === shopSelectedCategory)
+                          .map(product => {
+                            const isOutOfStock = product.inStock === false || (product.stockQuantity || 0) <= 0;
+                            return (
+                              <div 
+                                key={product.id} 
+                                className={`p-4 flex items-center justify-between hover:bg-gray-50 transition-colors cursor-pointer group rounded-2xl mx-1 my-0.5 ${isOutOfStock ? 'bg-gray-50/50' : ''}`}
+                                onClick={() => {
+                                  if (isOutOfStock) {
+                                    setToastMessage("দুঃখিত, এই পণ্যটি স্টকে নেই!");
+                                    setShowToast(true);
+                                    return;
+                                  }
+                                  const existing = shopCart.find(item => item.id === product.id);
+                                  if (existing) {
+                                    setShopCart(shopCart.map(item => 
+                                      item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+                                    ));
+                                  } else {
+                                    setShopCart([...shopCart, { ...product, quantity: 1 } as CartItem]);
+                                  }
+                                  // Visual feedback
+                                  setToastMessage(`${product.name} তালিকায় যোগ হয়েছে`);
+                                  setShowToast(true);
+                                }}
+                              >
+                                <motion.div 
+                                  className={`flex items-center justify-between w-full transition-all duration-300 ${isOutOfStock ? 'opacity-30 blur-[4px] grayscale' : ''}`}
+                                  whileTap={isOutOfStock ? {} : { scale: 0.98 }}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <div className="h-12 w-12 rounded-xl bg-gray-100 overflow-hidden border border-gray-100 shrink-0">
+                                      <img src={product.image} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                                    </div>
+                                    <div>
+                                      <p className="font-bold text-gray-800 text-sm leading-tight">{product.name}</p>
+                                      <p className="text-[11px] text-muted-foreground">
+                                        স্টক: <span className={(product.stockQuantity !== undefined && product.stockQuantity < 5) ? "text-red-500 font-bold" : ""}>
+                                          {product.stockQuantity || 0}
+                                        </span> {product.unit}
+                                        {isOutOfStock && <span className="ml-2 text-red-600 font-bold">(স্টক নেই)</span>}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <p className="font-black text-green-700">৳{product.price}</p>
+                                    <div className={`h-8 w-8 rounded-full flex items-center justify-center transition-all ${isOutOfStock ? 'bg-gray-100 text-gray-400' : 'bg-green-50 text-green-600 group-hover:bg-green-600 group-hover:text-white'}`}>
+                                      {isOutOfStock ? <X size={16} /> : <Plus size={18} />}
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Shop Cart */}
+                  <Card className="border-none shadow-sm rounded-3xl overflow-hidden flex flex-col h-[650px]">
+                    <CardHeader className="bg-gray-900 text-white p-6 shrink-0">
+                      <CardTitle className="text-xl font-black flex items-center gap-2">
+                        <ShoppingBasket size={24} />
+                        বিক্রয় তালিকা
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0 overflow-y-auto flex-1 bg-gray-50/50">
+                      {shopCart.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center p-12 text-center opacity-30">
+                          <ShoppingBag size={64} className="mb-4" />
+                          <p className="font-bold">তালিকা খালি</p>
+                          <p className="text-xs italic">বাম পাশের ক্যাটালগ থেকে পণ্য যোগ করুন</p>
+                        </div>
+                      ) : (
+                        <div className="p-4 space-y-3">
+                          {shopCart.map((item, idx) => (
+                            <div key={idx} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className="h-10 w-10 rounded-lg bg-gray-50 flex items-center justify-center text-xs font-bold text-gray-400">
+                                  {idx + 1}
+                                </div>
+                                <div>
+                                  <p className="font-bold text-gray-800 text-sm">{item.name}</p>
+                                  <p className="text-[11px] text-muted-foreground">৳{item.price} x {item.quantity}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
+                                  <button 
+                                    className="h-7 w-7 flex items-center justify-center hover:bg-white rounded-md text-gray-600 transition-colors"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (item.quantity > 1) {
+                                        setShopCart(shopCart.map(i => i.id === item.id ? { ...i, quantity: i.quantity - 1 } : i));
+                                      } else {
+                                        setShopCart(shopCart.filter(i => i.id !== item.id));
+                                      }
+                                    }}
+                                  >
+                                    <Minus size={14} />
+                                  </button>
+                                  <span className="w-8 text-center text-sm font-bold">{item.quantity}</span>
+                                  <button 
+                                    className="h-7 w-7 flex items-center justify-center hover:bg-white rounded-md text-gray-600 transition-colors"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setShopCart(shopCart.map(i => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i));
+                                    }}
+                                  >
+                                    <Plus size={14} />
+                                  </button>
+                                </div>
+                                <button 
+                                  onClick={() => setShopCart(shopCart.filter(i => i.id !== item.id))}
+                                  className="h-8 w-8 flex items-center justify-center text-red-100 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                    <CardFooter className="bg-gray-100 p-6 flex flex-col gap-4 border-t border-gray-200">
+                      <div className="flex justify-between items-center text-gray-700">
+                        <span className="font-bold">মোট পরিমাণ:</span>
+                        <span className="text-xl font-black">৳{shopCart.reduce((sum, item) => sum + (item.price * item.quantity), 0)}</span>
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-gray-500">ক্রেতার নাম</label>
+                            <Input 
+                              value={shopCustomerName}
+                              onChange={e => setShopCustomerName(e.target.value)}
+                              placeholder="নাম"
+                              className="h-10 rounded-xl bg-white border-gray-100 text-xs shadow-inner"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-gray-500">ফোন নাম্বার</label>
+                            <Input 
+                              value={shopCustomerPhone}
+                              onChange={e => setShopCustomerPhone(e.target.value)}
+                              placeholder="মোবাইল"
+                              className="h-10 rounded-xl bg-white border-gray-100 text-xs shadow-inner"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-gray-500">ঠিকানা (ঐচ্ছিক)</label>
+                            <Input 
+                              value={shopCustomerAddress}
+                              onChange={e => setShopCustomerAddress(e.target.value)}
+                              placeholder="ঠিকানা"
+                              className="h-10 rounded-xl bg-white border-gray-100 text-xs shadow-inner"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-gray-500 flex items-center gap-1">
+                              ডেলিভারি চার্জ
+                              {config.enableAutoDeliveryCharge && (
+                                <span className="bg-amber-100 text-amber-600 text-[8px] px-1 rounded">অটো</span>
+                              )}
+                            </label>
+                            <Input 
+                              type="number"
+                              value={shopDeliveryCharge}
+                              onChange={e => setShopDeliveryCharge(Number(e.target.value))}
+                              placeholder="চার্জ"
+                              className={`h-10 rounded-xl text-xs shadow-inner ${config.enableAutoDeliveryCharge ? 'bg-amber-50 border-amber-100' : 'bg-white border-gray-100'}`}
+                            />
+                          </div>
+                        </div>
+
+                        <label className="text-[10px] uppercase font-bold text-gray-500 mt-2">পেমেন্ট মেথড</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button 
+                            variant={shopPaymentMethod === "Cash" ? "default" : "outline"}
+                            className={`h-11 rounded-xl font-bold ${shopPaymentMethod === "Cash" ? "bg-green-600 hover:bg-green-700" : ""}`}
+                            onClick={() => setShopPaymentMethod("Cash")}
+                          >ক্যাশ (নগদ)</Button>
+                          <Button 
+                            variant={(shopPaymentMethod === "bKash" || shopPaymentMethod === "Nagad" || shopPaymentMethod === "Rocket" || shopPaymentMethod === "Bank Transfer" || shopPaymentMethod === "Online") ? "default" : "outline"}
+                            className={`h-11 rounded-xl font-bold ${(shopPaymentMethod === "bKash" || shopPaymentMethod === "Nagad" || shopPaymentMethod === "Rocket" || shopPaymentMethod === "Bank Transfer" || shopPaymentMethod === "Online") ? "bg-blue-600 hover:bg-blue-700" : ""}`}
+                            onClick={() => setShopPaymentMethod("Online")}
+                          >অনলাইন</Button>
+                        </div>
+                        
+                        {(shopPaymentMethod === "Online" || shopPaymentMethod === "bKash" || shopPaymentMethod === "Nagad" || shopPaymentMethod === "Rocket" || shopPaymentMethod === "Bank Transfer") && (
+                          <motion.div 
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            className="grid grid-cols-3 gap-2 mt-1"
+                          >
+                            <Button 
+                              variant={shopPaymentMethod === "bKash" ? "default" : "outline"}
+                              className={`h-9 px-1 rounded-xl text-[10px] font-bold ${shopPaymentMethod === "bKash" ? "bg-pink-600 hover:bg-pink-700" : "border-pink-200 text-pink-700 hover:bg-pink-50"}`}
+                              onClick={() => setShopPaymentMethod("bKash")}
+                            >বিকাশ</Button>
+                            <Button 
+                              variant={shopPaymentMethod === "Nagad" ? "default" : "outline"}
+                              className={`h-9 px-1 rounded-xl text-[10px] font-bold ${shopPaymentMethod === "Nagad" ? "bg-orange-600 hover:bg-orange-700" : "border-orange-200 text-orange-700 hover:bg-orange-50"}`}
+                              onClick={() => setShopPaymentMethod("Nagad")}
+                            >নগদ</Button>
+                            <Button 
+                              variant={shopPaymentMethod === "Rocket" ? "default" : "outline"}
+                              className={`h-9 px-1 rounded-xl text-[10px] font-bold ${shopPaymentMethod === "Rocket" ? "bg-purple-600 hover:bg-purple-700" : "border-purple-200 text-purple-700 hover:bg-purple-50"}`}
+                              onClick={() => setShopPaymentMethod("Rocket")}
+                            >রকেট</Button>
+                            <Button 
+                              variant={shopPaymentMethod === "Bank Transfer" ? "default" : "outline"}
+                              className={`h-9 px-1 rounded-xl text-[10px] font-bold ${shopPaymentMethod === "Bank Transfer" ? "bg-blue-800 hover:bg-blue-900" : "border-blue-200 text-blue-800 hover:bg-blue-50"}`}
+                              onClick={() => setShopPaymentMethod("Bank Transfer")}
+                            >ব্যাংক</Button>
+                          </motion.div>
+                        )}
+                      </div>
+                      <Button 
+                        className="w-full h-14 rounded-2xl bg-green-700 hover:bg-green-800 text-white font-black text-lg shadow-lg shadow-green-100"
+                        disabled={shopCart.length === 0}
+                        onClick={handleShopSale}
+                      >
+                        <CheckCircle size={20} className="mr-2" /> বিক্রয় নিশ্চিত করুন
+                      </Button>
+                    </CardFooter>
+                  </Card>
+                </div>
+
+                {/* Shop Sale History */}
+                <div className="mt-8 space-y-4">
+                  <h4 className="font-bold text-lg flex items-center gap-2">
+                    <History size={20} className="text-blue-600" />
+                    দোকান বিক্রির হিস্ট্রি (আজকের)
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {orders
+                      .filter(o => o.isShopSale && o.status !== 'cancelled')
+                      .filter(o => {
+                        const now = new Date();
+                        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                        const oDate = o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt);
+                        return oDate >= todayStart;
+                      })
+                      .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))
+                      .map(sale => (
+                        <Card key={sale.id} className="bg-white border-none shadow-sm rounded-2xl overflow-hidden">
+                          <CardContent className="p-4">
+                            <div className="flex justify-between items-start mb-2">
+                              <div>
+                                <p className="text-[10px] uppercase font-bold text-gray-400">অর্ডার আইডি: #{sale.id.slice(-6).toUpperCase()}</p>
+                                <p className="text-xs font-bold text-gray-500">{sale.createdAt?.toDate ? sale.createdAt.toDate().toLocaleTimeString('bn-BD') : ""}</p>
+                              </div>
+                              <Badge className="bg-green-50 text-green-700 border-green-100">৳{sale.totalPrice}</Badge>
+                            </div>
+                            <div className="text-xs text-gray-600 mb-3 line-clamp-1 italic">
+                              {sale.items.map(i => `${i.name} (${i.quantity})`).join(', ')}
+                            </div>
+                            <div className="flex gap-2">
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="flex-1 h-9 rounded-xl font-bold bg-purple-50 text-purple-700 border-purple-100"
+                                onClick={() => {
+                                  setPrintableOrder(sale);
+                                  setShowPrintMemo(true);
+                                }}
+                              >
+                                <Printer size={14} className="mr-2" />
+                                প্রিন্ট মেমো
+                              </Button>
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="h-9 w-9 rounded-xl border-red-100 text-red-500 hover:bg-red-50"
+                                onClick={() => handleUpdateOrderStatus(sale.id, 'cancelled')}
+                              >
+                                <X size={14} />
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    {orders.filter(o => o.isShopSale && o.status !== 'cancelled').length === 0 && (
+                      <div className="col-span-full py-12 text-center text-gray-400 font-bold bg-gray-50 rounded-[32px] border-2 border-dashed border-gray-100">
+                        আজকের কোনো দোকান বিক্রি নেই
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {adminSubTab === "orders" && (
                   <div className="space-y-6">
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-2">
                       <h3 className="text-xl font-bold">অর্ডার ম্যানেজমেন্ট</h3>
-                      <div className="flex bg-gray-100 p-1 rounded-xl">
+                      <div className="flex bg-gray-100 p-1 rounded-xl overflow-x-auto scrollbar-hide">
                         <button 
                           onClick={() => setOrderFilter("pending")}
-                          className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${orderFilter === 'pending' ? 'bg-white shadow-sm text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
+                          className={`px-4 py-2 rounded-lg text-[11px] md:text-sm font-bold transition-all whitespace-nowrap ${orderFilter === 'pending' ? 'bg-white shadow-sm text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
                         >
-                          পেন্ডিং ({orders.filter(o => o.status !== 'delivered').length})
+                          পেন্ডিং ({orders.filter(o => o.status !== 'delivered' && o.status !== 'cancelled').length})
                         </button>
                         <button 
                           onClick={() => setOrderFilter("delivered")}
-                          className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${orderFilter === 'delivered' ? 'bg-white shadow-sm text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
+                          className={`px-4 py-2 rounded-lg text-[11px] md:text-sm font-bold transition-all whitespace-nowrap ${orderFilter === 'delivered' ? 'bg-white shadow-sm text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
                         >
                           ডেলিভারি সম্পন্ন ({orders.filter(o => o.status === 'delivered').length})
+                        </button>
+                        <button 
+                          onClick={() => setOrderFilter("cancelled")}
+                          className={`px-4 py-2 rounded-lg text-[11px] md:text-sm font-bold transition-all whitespace-nowrap ${orderFilter === 'cancelled' ? 'bg-white shadow-sm text-red-600' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                          বাতিলকৃত ({orders.filter(o => o.status === 'cancelled').length})
                         </button>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-2">
-                      <Card className="bg-green-50 border-green-100">
-                        <CardContent className="p-4 flex items-center gap-4">
-                          <div className="h-10 w-10 rounded-full bg-green-600 flex items-center justify-center text-white">
-                            <ShoppingBag size={20} />
-                          </div>
-                          <div>
-                            <p className="text-[10px] uppercase font-bold text-green-700">মোট বিক্রি</p>
-                            <p className="text-xl font-black text-green-900">৳{salesSummary.total}</p>
-                          </div>
-                        </CardContent>
-                      </Card>
-                      <Card className="bg-blue-50 border-blue-100">
-                        <CardContent className="p-4 flex items-center gap-4">
-                          <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center text-white">
-                            <Phone size={20} />
-                          </div>
-                          <div>
-                            <p className="text-[10px] uppercase font-bold text-blue-700">অনলাইন পেমেন্ট</p>
-                            <p className="text-xl font-black text-blue-900">৳{salesSummary.online}</p>
-                          </div>
-                        </CardContent>
-                      </Card>
-                      <Card className="bg-amber-50 border-amber-100">
-                        <CardContent className="p-4 flex items-center gap-4">
-                          <div className="h-10 w-10 rounded-full bg-amber-600 flex items-center justify-center text-white">
-                            <Home size={20} />
-                          </div>
-                          <div>
-                            <p className="text-[10px] uppercase font-bold text-amber-700">ক্যাশ অন ডেলিভারি</p>
-                            <p className="text-xl font-black text-amber-900">৳{salesSummary.cash}</p>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
-
                     <div className="grid gap-4">
                       {orders
-                        .filter(order => orderFilter === 'delivered' ? order.status === 'delivered' : order.status !== 'delivered')
+                        .filter(order => {
+                          if (orderFilter === 'delivered') return order.status === 'delivered';
+                          if (orderFilter === 'cancelled') return order.status === 'cancelled';
+                          return order.status !== 'delivered' && order.status !== 'cancelled';
+                        })
                         .map(order => (
                         <Card key={order.id} className="overflow-hidden">
                           <div className={`h-2 w-full ${
                             order.status === 'pending' ? 'bg-yellow-400' : 
                             order.status === 'confirmed' ? 'bg-blue-400' : 
                             order.status === 'shipped' ? 'bg-indigo-400' :
-                            order.status === 'delivered' ? 'bg-green-400' : 'bg-red-400'
+                            order.status === 'delivered' ? 'bg-green-400' : 'bg-red-500'
                           }`} />
                           <CardContent className="p-6">
                             <div className="flex flex-col md:flex-row justify-between gap-6">
                               <div className="space-y-2">
                                 <div className="flex items-center gap-2">
-                                  <Badge variant="outline">{statusLabels.find(s => s.status === order.status)?.label || order.status.toUpperCase()}</Badge>
+                                  <Badge variant={order.status === 'cancelled' ? 'destructive' : 'outline'}>
+                                    {statusLabels[order.status] || order.status.toUpperCase()}
+                                  </Badge>
                                   <span className="text-xs text-muted-foreground">{order.createdAt?.toDate ? order.createdAt.toDate().toLocaleString('bn-BD') : "অজানা তারিখ"}</span>
                                 </div>
                                 <h4 className="font-bold text-lg">{order.customerName}</h4>
                                 <p className="text-sm">ফোন: {order.customerPhone}</p>
                                 <p className="text-sm">ঠিকানা: {order.customerAddress}</p>
                                 <p className="text-sm font-bold">পেমেন্ট: {order.paymentMethod}</p>
+                                {order.paymentNumber && (
+                                  <div className="flex items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100">
+                                    <span className="text-[10px] font-bold text-gray-500 uppercase">পেমেন্ট নম্বর: {order.paymentNumber}</span>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="icon" 
+                                      className="h-6 w-6 text-gray-400 hover:text-green-600"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(order.paymentNumber);
+                                        setToastMessage("নম্বর কপি করা হয়েছে");
+                                        setShowToast(true);
+                                      }}
+                                    >
+                                      <Copy size={12} />
+                                    </Button>
+                                  </div>
+                                )}
+                                {order.status === 'cancelled' && order.cancellationReason && (
+                                  <div className="p-2 bg-red-50 border border-red-100 rounded-lg">
+                                    <p className="text-[10px] text-red-700 font-bold uppercase mb-1">বাতিলের কারণ:</p>
+                                    <p className="text-xs text-red-600 italic">{order.cancellationReason}</p>
+                                  </div>
+                                )}
                                 {order.location && (
                                   <Button 
                                     variant="outline" 
@@ -2679,7 +4434,17 @@ export default function App() {
                                 <ul className="text-sm space-y-1">
                                   {order.items.map((item, idx) => (
                                     <li key={idx} className="flex justify-between items-center bg-gray-50 p-2 rounded-lg mb-1">
-                                      <span>{item.name} x {item.quantity}</span>
+                                      <div className="flex items-center gap-2">
+                                        {order.status !== 'delivered' && order.status !== 'cancelled' && (
+                                          <button 
+                                            className="h-6 w-6 flex items-center justify-center text-red-400 hover:text-red-700 hover:bg-red-50 rounded-full transition-colors"
+                                            onClick={() => handleRemoveOrderItem(order.id, idx)}
+                                          >
+                                            <X size={14} />
+                                          </button>
+                                        )}
+                                        <span>{item.name} x {item.quantity}</span>
+                                      </div>
                                       <span className="font-bold">৳{item.price * item.quantity}</span>
                                     </li>
                                   ))}
@@ -2688,17 +4453,75 @@ export default function App() {
                                   <span className="font-bold text-green-800">সর্বমোট:</span>
                                   <span className="font-black text-lg text-green-700">৳{order.totalPrice}</span>
                                 </div>
+                                <div className="mt-4 space-y-2">
+                                  <label className="text-[10px] font-bold text-muted-foreground uppercase px-1">রাইডার নিয়োগ করুন</label>
+                                  <select 
+                                    className="w-full p-2.5 rounded-xl border border-gray-200 bg-white text-xs font-bold"
+                                    value={order.riderId || ""}
+                                    onChange={(e) => handleAssignRider(order.id, e.target.value)}
+                                  >
+                                    <option value="">কোন রাইডার নেই</option>
+                                    {staff.filter(s => s.role === "Rider").map(s => (
+                                      <option key={s.id} value={s.id}>{s.name}</option>
+                                    ))}
+                                  </select>
+                                </div>
                               </div>
                               <div className="flex flex-col gap-2 min-w-[150px]">
-                                {order.status !== 'delivered' && (
+                                {order.status !== 'cancelled' && (
                                   <>
-                                    <Button size="sm" variant="outline" className="h-10 font-bold" onClick={() => handleUpdateOrderStatus(order.id, 'confirmed')}>অর্ডার কনফার্ম</Button>
-                                    <Button size="sm" variant="outline" className="h-10 font-bold bg-blue-50 text-blue-700 border-blue-100" onClick={() => handleUpdateOrderStatus(order.id, 'shipped')}>ডেলিভারি পথিমধ্যে</Button>
-                                    <Button size="sm" variant="outline" className="h-10 font-bold bg-green-50 text-green-700 border-green-100" onClick={() => handleUpdateOrderStatus(order.id, 'delivered')}>ডেলিভারি সম্পন্ন</Button>
-                                    <Button size="sm" variant="outline" className="h-10 font-bold text-red-500 border-red-100" onClick={() => handleUpdateOrderStatus(order.id, 'cancelled')}>অর্ডার বাতিল</Button>
+                                    {order.status !== 'delivered' && (
+                                      <>
+                                        <Button size="sm" variant="outline" className="h-10 font-bold" onClick={() => handleUpdateOrderStatus(order.id, 'confirmed')}>অর্ডার কনফার্ম</Button>
+                                        <Button size="sm" variant="outline" className="h-10 font-bold bg-blue-50 text-blue-700 border-blue-100" onClick={() => handleUpdateOrderStatus(order.id, 'shipped')}>ডেলিভারি পথিমধ্যে</Button>
+                                        <Button size="sm" variant="outline" className="h-10 font-bold bg-green-50 text-green-700 border-green-100" onClick={() => handleUpdateOrderStatus(order.id, 'delivered')}>ডেলিভারি সম্পন্ন</Button>
+                                        <Button size="sm" variant="outline" className="h-10 font-bold bg-amber-50 text-amber-700 border-amber-100" onClick={() => handleShareWithRider(order)}>
+                                          <Share2 size={16} className="mr-2" />
+                                          রাইডারকে পাঠান
+                                        </Button>
+                                      </>
+                                    )}
+                                    <Button 
+                                      size="sm" 
+                                      variant="outline" 
+                                      className="h-10 font-bold bg-purple-50 text-purple-700 border-purple-100" 
+                                      onClick={() => {
+                                        setPrintableOrder(order);
+                                        setShowPrintMemo(true);
+                                      }}
+                                    >
+                                      <Printer size={16} className="mr-2" />
+                                      ক্যাশ মেমো প্রিন্ট
+                                    </Button>
+                                    <Button 
+                                      size="sm" 
+                                      className="h-10 font-bold bg-green-600 hover:bg-green-700 text-white" 
+                                      onClick={() => {
+                                        const text = `🛒 *অর্ডার রিসিট - ${config.storeName}*\n\n` +
+                                          `অর্ডার আইডি: #${order.id.slice(-6).toUpperCase()}\n` +
+                                          `কাস্টমার: ${order.customerName}\n` +
+                                          `ফোন: ${order.customerPhone}\n` +
+                                          `ঠিকানা: ${order.customerAddress}\n\n` +
+                                          `*পণ্যসমূহ:*\n` +
+                                          order.items.map(i => `- ${i.name} x ${i.quantity} = ৳${i.price * i.quantity}`).join('\n') +
+                                          `\n\nসাব-টোটাল: ৳${order.subtotal || order.totalPrice - (order.paymentFee || 0)}\n` +
+                                          (order.paymentFee ? `পেমেন্ট চার্জ: ৳${order.paymentFee}\n` : "") +
+                                          (order.deliveryCharge ? `ডেলিভারি চার্জ: ৳${order.deliveryCharge}\n` : "") +
+                                          `*সর্বমোট: ৳${order.totalPrice}*\n` +
+                                          `পেমেন্ট: ${order.paymentMethod}\n\n` +
+                                          `ধন্যবাদ!`;
+                                        window.open(`https://wa.me/${order.customerPhone}?text=${encodeURIComponent(text)}`);
+                                      }}
+                                    >
+                                      <Share2 size={16} className="mr-2" />
+                                      হোয়াটসঅ্যাপ শেয়ার
+                                    </Button>
+                                    {order.status !== 'delivered' && (
+                                      <Button size="sm" variant="outline" className="h-10 font-bold text-red-500 border-red-100" onClick={() => handleUpdateOrderStatus(order.id, 'cancelled')}>অর্ডার বাতিল</Button>
+                                    )}
                                   </>
                                 )}
-                                {order.status === 'delivered' && (
+                                {(order.status === 'delivered' || order.status === 'cancelled') && (
                                   <Button size="sm" variant="destructive" className="h-10 font-bold" onClick={() => handleDeleteOrder(order.id)}>
                                     <Trash2 className="mr-2 h-4 w-4" />
                                     ডিলিট করুন
@@ -2713,11 +4536,323 @@ export default function App() {
                   </div>
                 )}
 
+                {adminSubTab === "expenses" && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>নতুন ব্যয় যোগ করুন</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="space-y-4">
+                          <label className="text-xs font-bold text-muted-foreground uppercase">লেনদেনের ধরণ</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <Button 
+                              variant={newExpense.category === "Salary" ? "default" : "outline"}
+                              onClick={() => setNewExpense({...newExpense, category: "Salary"})}
+                              className={`h-12 rounded-xl font-bold flex flex-col gap-0.5 ${newExpense.category === "Salary" ? "bg-red-600" : ""}`}
+                            >
+                              <Wallet size={16} />
+                              <span className="text-[10px]">বেতন</span>
+                            </Button>
+                            <Button 
+                              variant={newExpense.category === "Take" ? "default" : "outline"}
+                              onClick={() => setNewExpense({...newExpense, category: "Take"})}
+                              className={`h-12 rounded-xl font-bold flex flex-col gap-0.5 ${newExpense.category === "Take" ? "bg-amber-600" : ""}`}
+                            >
+                              <ArrowUpRight size={16} />
+                              <span className="text-[10px]">টাকা নিয়েছে/লোন</span>
+                            </Button>
+                            <Button 
+                              variant={newExpense.category === "Return" ? "default" : "outline"}
+                              onClick={() => setNewExpense({...newExpense, category: "Return"})}
+                              className={`h-12 rounded-xl font-bold flex flex-col gap-0.5 ${newExpense.category === "Return" ? "bg-green-600" : ""}`}
+                            >
+                              <ArrowDownLeft size={16} />
+                              <span className="text-[10px]">টাকা ফেরত</span>
+                            </Button>
+                            <Button 
+                              variant={newExpense.category === "Advance" ? "default" : "outline"}
+                              onClick={() => setNewExpense({...newExpense, category: "Advance"})}
+                              className={`h-12 rounded-xl font-bold flex flex-col gap-0.5 ${newExpense.category === "Advance" ? "bg-blue-600" : ""}`}
+                            >
+                              <Plus size={16} />
+                              <span className="text-[10px]">অ্যাডভান্স/জমা</span>
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-muted-foreground uppercase">পরিমাণ (৳)</label>
+                          <Input 
+                            type="number" 
+                            placeholder="টাকার পরিমাণ" 
+                            value={newExpense.amount || ""} 
+                            onChange={e => setNewExpense({...newExpense, amount: Number(e.target.value)})} 
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-muted-foreground uppercase">কর্মী / রাইডার (ঐচ্ছিক)</label>
+                          <select 
+                            className="w-full p-3 rounded-xl border border-gray-200 bg-white"
+                            value={newExpense.staffId}
+                            onChange={e => setNewExpense({...newExpense, staffId: e.target.value})}
+                          >
+                            <option value="">কারো নাম নেই</option>
+                            {staff.map(s => (
+                              <option key={s.id} value={s.id}>{s.name} ({s.role === "Worker" ? "শ্রমিক" : "রাইডার"})</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-muted-foreground uppercase">বিস্তারিত / নোট (ঐচ্ছিক)</label>
+                          <Input 
+                            placeholder="বিস্তারিত লিখুন" 
+                            value={newExpense.note || ""} 
+                            onChange={e => setNewExpense({...newExpense, note: e.target.value})} 
+                          />
+                        </div>
+                        <Button onClick={handleAddExpense} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold h-12 rounded-xl">ব্যয় যোগ করুন</Button>
+                      </CardContent>
+                    </Card>
+
+                    <div className="space-y-4">
+                      <div className="p-6 bg-red-50 rounded-3xl border border-red-100 shadow-sm relative flex flex-col gap-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-bold text-red-700 uppercase">সর্বমোট ব্যয়</p>
+                            <p className="text-3xl font-black text-red-900 leading-tight">৳{salesSummary.totalExpenses}</p>
+                          </div>
+                          <div className="h-14 w-14 rounded-2xl bg-red-600 flex items-center justify-center text-white shadow-lg">
+                            <Wallet size={28} />
+                          </div>
+                        </div>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={handleClearExpenses}
+                          className="w-full text-xs h-9 bg-red-100 text-red-700 hover:bg-red-200 font-bold rounded-xl border-red-200"
+                        >
+                          <Trash2 size={14} className="mr-2" /> সব ব্যয়ের ইতিহাস মুছুন
+                        </Button>
+                      </div>
+
+                        <div className="grid gap-3">
+                          <div className="flex bg-gray-100 p-1 rounded-xl mb-2 overflow-x-auto">
+                            <button 
+                              onClick={() => setExpenseFilter("all_expenses")} 
+                              className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${expenseFilter === 'all_expenses' ? 'bg-white shadow-sm text-red-600' : 'text-gray-500'}`}
+                            >সব ব্যয়</button>
+                            {staff.map(s => (
+                              <button 
+                                key={s.id}
+                                onClick={() => setExpenseFilter(`staff_${s.id}`)}
+                                className={`px-4 py-2 rounded-lg text-xs font-bold whitespace-nowrap ${expenseFilter === `staff_${s.id}` ? 'bg-white shadow-sm text-red-600' : 'text-gray-500'}`}
+                              >{s.name}</button>
+                            ))}
+                          </div>
+
+                          {expenseFilter.startsWith('staff_') && (() => {
+                            const sId = expenseFilter.replace('staff_', '');
+                            const sExpenses = expenses.filter(e => e.staffId === sId);
+                            const debit = sExpenses.filter(e => e.category === "Salary" || e.category === "Take").reduce((sum, e) => sum + (e.amount || 0), 0);
+                            const credit = sExpenses.filter(e => e.category === "Return" || e.category === "Advance").reduce((sum, e) => sum + (e.amount || 0), 0);
+                            const balance = debit - credit;
+                            const staffName = staff.find(s => s.id === sId)?.name || "কর্মীর";
+                            
+                            return (
+                              <motion.div 
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="bg-white p-5 rounded-3xl border border-blue-100 shadow-sm mb-4 space-y-3"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <h4 className="font-black text-blue-900 text-sm">{staffName} এর হিসাব</h4>
+                                  <Badge className={balance >= 0 ? "bg-amber-100 text-amber-900 border-amber-200" : "bg-green-100 text-green-900 border-green-200"}>
+                                    {balance >= 0 ? "দোকানদার পাওনা" : "কর্মী পাওনা"}
+                                  </Badge>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3 text-center">
+                                  <div className="p-3 bg-red-50 rounded-2xl border border-red-100">
+                                    <p className="text-[9px] font-bold text-red-700 uppercase leading-none mb-1">দোকান থেকে নিয়েছে</p>
+                                    <p className="text-xl font-black text-red-900 leading-none">৳{debit}</p>
+                                  </div>
+                                  <div className="p-3 bg-green-50 rounded-2xl border border-green-100">
+                                    <p className="text-[9px] font-bold text-green-700 uppercase leading-none mb-1">দোকানকে দিয়েছে</p>
+                                    <p className="text-xl font-black text-green-900 leading-none">৳{credit}</p>
+                                  </div>
+                                </div>
+                                <div className={`p-4 rounded-2xl text-center border ${balance >= 0 ? "bg-amber-50 border-amber-200 shadow-[0_4px_12px_rgba(245,158,11,0.1)]" : "bg-blue-50 border-blue-200 shadow-[0_4px_12px_rgba(59,130,246,0.1)]"}`}>
+                                  <p className="text-[10px] font-bold uppercase mb-1 opacity-70">নিট বকেয়া স্থিতি</p>
+                                  <p className={`text-2xl font-black ${balance >= 0 ? "text-amber-700" : "text-blue-700"}`}>
+                                    ৳{Math.abs(balance)}
+                                  </p>
+                                  <div className="flex items-center justify-center gap-1 mt-1">
+                                    <div className={`h-1.5 w-1.5 rounded-full ${balance >= 0 ? "bg-amber-400" : "bg-blue-400"} animate-pulse`} />
+                                    <p className="text-[10px] font-bold opacity-80">
+                                      {balance > 0 ? "কর্মী দোকানদারের ঋণগ্রস্ত" : balance < 0 ? "কর্মী দোকানদারের কাছে টাকা পাবে" : "হিসাব সম্পূর্ণ পরিশোধ"}
+                                    </p>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            );
+                          })()}
+
+                          {expenses.filter(e => {
+                            if (expenseFilter.startsWith('staff_')) {
+                              return e.staffId === expenseFilter.replace('staff_', '');
+                            }
+                            return true;
+                          }).length === 0 ? (
+                          <div className="p-12 text-center bg-white rounded-3xl border border-dashed">
+                             <p className="text-gray-400 font-medium">কোন ব্যয়ের হিসাব পাওয়া যায়নি</p>
+                          </div>
+                        ) : (
+                          expenses.sort((a,b) => {
+                            const tA = a.date?.toMillis ? a.date.toMillis() : 0;
+                            const tB = b.date?.toMillis ? b.date.toMillis() : 0;
+                            return tB - tA;
+                          }).map(exp => (
+                            <Card key={exp.id} className="overflow-hidden bg-white border-green-50">
+                              <CardContent className="p-4 flex items-center justify-between">
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className={`text-[10px] font-bold ${
+                                      exp.category === "Salary" ? "border-red-100 bg-red-50 text-red-700" : 
+                                      exp.category === "Take" ? "border-amber-100 bg-amber-50 text-amber-700" :
+                                      exp.category === "Return" ? "border-green-100 bg-green-50 text-green-700" :
+                                      "border-blue-100 bg-blue-50 text-blue-700"
+                                    }`}>
+                                      {exp.category === "Salary" ? "বেতন" : 
+                                       exp.category === "Take" ? "টাকা নিয়েছে" : 
+                                       exp.category === "Return" ? "টাকা ফেরত" : "অ্যাডভান্স/জমা"}
+                                    </Badge>
+                                    <span className="text-[10px] text-muted-foreground">{exp.date?.toDate ? exp.date.toDate().toLocaleDateString('bn-BD') : "অজানা তারিখ"}</span>
+                                  </div>
+                                  <p className="font-bold text-gray-800 text-sm">{exp.note || "কোন নোট নেই"}</p>
+                                </div>
+                                <div className="flex items-center gap-4">
+                                  <p className={`text-lg font-black ${
+                                    (exp.category === "Salary" || exp.category === "Take") ? "text-red-600" : "text-green-600"
+                                  }`}>
+                                    { (exp.category === "Salary" || exp.category === "Take") ? "৳" : "৳" }{exp.amount}
+                                  </p>
+                                  <Button size="icon" variant="ghost" onClick={() => handleDeleteExpense(exp.id)} className="h-8 w-8 text-gray-400 hover:text-red-500">
+                                    <Trash2 size={16} />
+                                  </Button>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {adminSubTab === "staff" && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>{editingStaff ? "কর্মী তথ্য এডিট করুন" : "নতুন কর্মী যোগ করুন"}</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-muted-foreground uppercase">নাম</label>
+                          <Input 
+                            value={editingStaff ? editingStaff.name : newStaff.name} 
+                            onChange={e => editingStaff ? setEditingStaff({...editingStaff, name: e.target.value}) : setNewStaff({...newStaff, name: e.target.value})} 
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-muted-foreground uppercase">পদবী</label>
+                          <select 
+                            className="w-full p-3 rounded-xl border border-gray-200 bg-white"
+                            value={editingStaff ? editingStaff.role : newStaff.role}
+                            onChange={e => editingStaff ? setEditingStaff({...editingStaff, role: e.target.value as any}) : setNewStaff({...newStaff, role: e.target.value as any})}
+                          >
+                            <option value="Worker">শ্রমিক</option>
+                            <option value="Rider">রাইডার</option>
+                          </select>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-muted-foreground uppercase">ফোন নম্বর (ঐচ্ছিক)</label>
+                          <Input 
+                            value={editingStaff ? editingStaff.phone : newStaff.phone} 
+                            onChange={e => editingStaff ? setEditingStaff({...editingStaff, phone: e.target.value}) : setNewStaff({...newStaff, phone: e.target.value})} 
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          {editingStaff ? (
+                            <>
+                              <Button onClick={handleUpdateStaff} className="flex-1 bg-green-600 hover:bg-green-700">আপডেট করুন</Button>
+                              <Button onClick={() => setEditingStaff(null)} variant="outline" className="flex-1">বাতিল</Button>
+                            </>
+                          ) : (
+                            <Button onClick={handleAddStaff} className="w-full bg-green-600 hover:bg-green-700">কর্মী যোগ করুন</Button>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <div className="space-y-4">
+                      <h3 className="font-bold flex items-center gap-2"><Users size={20} className="text-green-600" /> বর্তমান কর্মী ও রাইডারগণ</h3>
+                      <div className="grid gap-3">
+                        {staff.length === 0 ? (
+                          <div className="p-12 text-center bg-white rounded-3xl border border-dashed">
+                             <p className="text-gray-400 font-medium">কোন কর্মী পাওয়া যায়নি</p>
+                          </div>
+                        ) : (
+                          staff.map(s => (
+                            <Card key={s.id} className="overflow-hidden bg-white border-green-50">
+                              <CardContent className="p-4 flex items-center justify-between">
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className={`text-[10px] font-bold ${s.role === "Rider" ? "border-blue-100 bg-blue-50 text-blue-700" : "border-green-100 bg-green-50 text-green-700"}`}>
+                                      {s.role === "Worker" ? "শ্রমিক" : "রাইডার"}
+                                    </Badge>
+                                    <p className="text-[10px] text-muted-foreground">{s.phone}</p>
+                                  </div>
+                                  <p className="font-bold text-gray-800">{s.name}</p>
+                                  <div className="mt-1">
+                                    {(() => {
+                                      const sExpenses = expenses.filter(e => e.staffId === s.id);
+                                      const debit = sExpenses.filter(e => e.category === "Salary" || e.category === "Take").reduce((sum, e) => sum + (e.amount || 0), 0);
+                                      const credit = sExpenses.filter(e => e.category === "Return" || e.category === "Advance").reduce((sum, e) => sum + (e.amount || 0), 0);
+                                      const balance = debit - credit;
+                                      
+                                      return (
+                                        <div className="space-y-0.5">
+                                          <p className={`text-[10px] font-bold ${balance >= 0 ? "text-amber-600" : "text-green-600"}`}>
+                                            {balance >= 0 ? "দোকানদার পাওনা:" : "কর্মী পাওনা:"} ৳{Math.abs(balance)}
+                                          </p>
+                                          {balance === 0 && (
+                                            <p className="text-[9px] text-gray-400 font-medium italic">হিসাব ক্লিয়ার</p>
+                                          )}
+                                        </div>
+                                      );
+                                    })()}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Button size="icon" variant="ghost" onClick={() => setEditingStaff(s)} className="h-8 w-8 text-blue-500 hover:bg-blue-50">
+                                    <Edit size={16} />
+                                  </Button>
+                                  <Button size="icon" variant="ghost" onClick={() => handleDeleteStaff(s.id)} className="h-8 w-8 text-red-500 hover:bg-red-50">
+                                    <Trash2 size={16} />
+                                  </Button>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {adminSubTab === "products" && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center justify-between">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center justify-between">
                         <span>{editingProduct ? "পণ্য এডিট করুন" : "নতুন পণ্য যোগ করুন"}</span>
                         {editingProduct && (
                           <Button variant="ghost" size="icon" onClick={() => setEditingProduct(null)}>
@@ -2732,12 +4867,26 @@ export default function App() {
                         value={editingProduct ? editingProduct.name : newProduct.name} 
                         onChange={e => editingProduct ? setEditingProduct({...editingProduct, name: e.target.value}) : setNewProduct({...newProduct, name: e.target.value})} 
                       />
-                      <Input 
-                        type="number" 
-                        placeholder="দাম" 
-                        value={editingProduct ? editingProduct.price : newProduct.price} 
-                        onChange={e => editingProduct ? setEditingProduct({...editingProduct, price: Number(e.target.value)}) : setNewProduct({...newProduct, price: Number(e.target.value)})} 
-                      />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-muted-foreground uppercase">বিক্রয় মূল্য (Selling Price)</label>
+                          <Input 
+                            type="number" 
+                            placeholder="বিক্রয় মূল্য" 
+                            value={editingProduct ? editingProduct.price : newProduct.price} 
+                            onChange={e => editingProduct ? setEditingProduct({...editingProduct, price: Number(e.target.value)}) : setNewProduct({...newProduct, price: Number(e.target.value)})} 
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-muted-foreground uppercase">ক্রয় মূল্য (Purchase Price)</label>
+                          <Input 
+                            type="number" 
+                            placeholder="ক্রয় মূল্য" 
+                            value={editingProduct ? editingProduct.purchasePrice : newProduct.purchasePrice} 
+                            onChange={e => editingProduct ? setEditingProduct({...editingProduct, purchasePrice: Number(e.target.value)}) : setNewProduct({...newProduct, purchasePrice: Number(e.target.value)})} 
+                          />
+                        </div>
+                      </div>
                       <Input 
                         placeholder="ইউনিট (যেমন: কেজি, লিটার)" 
                         value={editingProduct ? editingProduct.unit : newProduct.unit} 
@@ -2750,6 +4899,17 @@ export default function App() {
                           placeholder="স্টক পরিমাণ" 
                           value={editingProduct ? editingProduct.stockQuantity : newProduct.stockQuantity} 
                           onChange={e => editingProduct ? setEditingProduct({...editingProduct, stockQuantity: Number(e.target.value)}) : setNewProduct({...newProduct, stockQuantity: Number(e.target.value)})} 
+                        />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-red-600">নষ্ট পণ্যের পরিমাণ (Damaged Quantity)</label>
+                        <Input 
+                          type="number" 
+                          placeholder="নষ্ট পণ্যের পরিমাণ (যদি থাকে)" 
+                          className="border-red-100 bg-red-50/30"
+                          value={editingProduct ? (editingProduct.damagedCount || 0) : (newProduct.damagedCount || 0)} 
+                          onChange={e => editingProduct ? setEditingProduct({...editingProduct, damagedCount: Number(e.target.value)}) : setNewProduct({...newProduct, damagedCount: Number(e.target.value)})} 
                         />
                       </div>
                       <div className="space-y-2">
@@ -2870,9 +5030,31 @@ export default function App() {
                       <div className="space-y-2">
                         <label className="text-xs font-bold text-muted-foreground">বর্তমান ক্যাটাগরি সমূহ</label>
                         <div className="grid grid-cols-1 gap-2">
-                          {categories.map(cat => (
+                          {categories.map((cat, index) => (
                             <div key={cat.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border">
-                              <span className="font-medium">{cat.name}</span>
+                              <div className="flex items-center gap-3">
+                                <div className="flex flex-col gap-1">
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-6 w-6 text-gray-400 hover:text-green-600 disabled:opacity-30"
+                                    onClick={() => handleMoveCategory(cat, 'up')}
+                                    disabled={index === 0}
+                                  >
+                                    <ChevronUp size={14} />
+                                  </Button>
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-6 w-6 text-gray-400 hover:text-green-600 disabled:opacity-30"
+                                    onClick={() => handleMoveCategory(cat, 'down')}
+                                    disabled={index === categories.length - 1}
+                                  >
+                                    <ChevronDown size={14} />
+                                  </Button>
+                                </div>
+                                <span className="font-medium">{cat.name}</span>
+                              </div>
                               <Button 
                                 variant="ghost" 
                                 size="icon" 
@@ -2908,6 +5090,9 @@ export default function App() {
                                   </Badge>
                                   <Badge variant="outline" className="text-[10px] h-4 px-1 bg-green-50 text-green-700 border-green-100">
                                     বিক্রি: {p.soldCount || 0}
+                                  </Badge>
+                                  <Badge variant="outline" className="text-[10px] h-4 px-1 bg-red-50 text-red-700 border-red-100">
+                                    নষ্ট: {p.damagedCount || 0}
                                   </Badge>
                                 </div>
                               </div>
@@ -2996,6 +5181,18 @@ export default function App() {
                                 >
                                   <Trash2 size={16} />
                                 </Button>
+                                <Button 
+                                  variant="outline" 
+                                  size="icon" 
+                                  className="h-10 w-10 text-blue-600 border-blue-100 bg-blue-50 hover:bg-blue-600 hover:text-white rounded-xl transition-all"
+                                  onClick={() => {
+                                    handleAdminChatSelect(customer.phone);
+                                    setAdminSubTab("supports");
+                                  }}
+                                  title="সরাসরি চ্যাট করুন"
+                                >
+                                  <MessageSquare size={16} />
+                                </Button>
                                 {customer.image && (
                                   <Button 
                                     variant="outline" 
@@ -3030,24 +5227,24 @@ export default function App() {
                 )}
 
                 {adminSubTab === "supports" && (
-                  <div className="bg-white rounded-[32px] shadow-2xl overflow-hidden border border-green-100 h-[750px] flex flex-row shadow-green-100/50 relative">
-                    {/* Conversations Sidebar - Hidden on mobile if a chat is selected */}
-                    <div className={`w-full md:w-[350px] border-r border-gray-100 flex flex-col bg-white transition-all duration-300 ${
+                  <div className="bg-white rounded-[32px] shadow-2xl overflow-hidden border border-gray-100 flex flex-col md:flex-row h-[700px] max-h-[85vh]">
+                    {/* Sidebar: Customer List */}
+                    <div className={`w-full md:w-[350px] flex flex-col border-r border-gray-100 bg-white ${
                       selectedAdminChatPhone ? 'hidden md:flex' : 'flex'
                     }`}>
-                      <div className="p-6 border-b border-gray-100 bg-green-50/30">
-                        <h3 className="text-xl font-bold flex items-center gap-2 text-green-800">
-                          <MessageSquare className="text-green-600" />
-                          চ্যাট তালিকা
+                      <div className="p-6 border-b border-gray-50 text-center md:text-left">
+                        <h3 className="text-xl font-black text-gray-900 flex items-center gap-3 justify-center md:justify-start">
+                          <MessageSquare className="text-green-600" /> কাস্টমার সাপোর্ট
                         </h3>
-                        <p className="text-[10px] text-green-600 mt-1">সব কাস্টমারের সাথে কথোপকথন</p>
+                        <p className="text-xs text-gray-400 font-medium mt-1 uppercase tracking-widest leading-relaxed">কথোপকথন তালিকা</p>
                       </div>
+                      
                       <ScrollArea className="flex-1">
                         <div className="p-3 space-y-2">
                           {customers.filter(c => messages.some(m => m.senderPhone === c.phone)).length === 0 ? (
-                            <div className="py-24 text-center opacity-30">
-                              <MessageCircle size={64} className="mx-auto mb-3 text-green-700" />
-                              <p className="text-sm font-bold">এখনো কোনো মেসেজ নেই</p>
+                            <div className="flex flex-col items-center justify-center py-20 text-center opacity-40">
+                              <MessageCircle size={64} className="mb-4 text-green-200" />
+                              <p className="text-sm italic font-medium">কোনো সাম্প্রতিক মেসেজ নেই</p>
                             </div>
                           ) : (
                             customers
@@ -3171,19 +5368,78 @@ export default function App() {
                                           ? 'bg-green-600 text-white rounded-tr-none shadow-green-200'
                                           : 'bg-white border border-green-100 text-gray-800 rounded-tl-none shadow-gray-200/50'
                                       }`}>
-                                        <p className="leading-relaxed whitespace-pre-wrap break-words">{m.message}</p>
+                                        {m.imageUrl && (
+                                          <div className="mb-3 rounded-2xl overflow-hidden border border-black/5 shadow-inner bg-black/5">
+                                            <img 
+                                              src={m.imageUrl} 
+                                              alt="Attachment" 
+                                              className="max-w-full h-auto object-contain max-h-[350px]" 
+                                              referrerPolicy="no-referrer"
+                                            />
+                                          </div>
+                                        )}
+                                        
+                                        {editingChatMessageId === m.id ? (
+                                          <div className="space-y-2 py-1">
+                                            <Input 
+                                              value={editingChatMessageText}
+                                              onChange={e => setEditingChatMessageText(e.target.value)}
+                                              className={`h-8 text-xs ${m.type === 'admin' ? 'bg-white/20 border-white/30 text-white placeholder:text-white/50' : 'bg-gray-50 border-gray-200'}`}
+                                              autoFocus
+                                            />
+                                            <div className="flex gap-2">
+                                              <Button 
+                                                size="sm" 
+                                                variant="ghost" 
+                                                className={`h-7 text-[10px] ${m.type === 'admin' ? 'bg-white/20 text-white hover:bg-white/30' : 'bg-gray-200'}`}
+                                                onClick={() => {
+                                                  setEditingChatMessageId(null);
+                                                  setEditingChatMessageText("");
+                                                }}
+                                              >বাতিল</Button>
+                                              <Button 
+                                                size="sm" 
+                                                className={`h-7 text-[10px] ${m.type === 'admin' ? 'bg-white text-green-700 hover:bg-white/90' : 'bg-green-600 text-white'}`}
+                                                disabled={isUpdatingChatMessage}
+                                                onClick={handleUpdateChatMessage}
+                                              >
+                                                {isUpdatingChatMessage ? "সেভ হচ্ছে..." : "সেভ করুন"}
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <p className="leading-relaxed whitespace-pre-wrap break-words">{m.message}</p>
+                                        )}
+
                                         <div className="text-[10px] mt-3 opacity-60 flex justify-between gap-6 border-t pt-2 border-white/10">
-                                          <span className="font-bold uppercase tracking-wider">{m.type === 'admin' ? 'অ্যাডমিন' : 'কাস্টমার'}</span>
+                                          <div className="flex items-center gap-1">
+                                            <span className="font-bold uppercase tracking-wider">{m.type === 'admin' ? 'অ্যাডমিন' : 'কাস্টমার'}</span>
+                                            {m.updatedAt && <span className="text-[8px] font-bold">(এডিট করা)</span>}
+                                          </div>
                                           <span className="font-mono">{m.createdAt?.toDate ? m.createdAt.toDate().toLocaleTimeString('bn-BD', {hour: '2-digit', minute:'2-digit', hour12: true}) : "এখনই"}</span>
                                         </div>
+
+                                        {/* Admin Side Delete/Edit Actions */}
+                                        {!editingChatMessageId && (
+                                          <div className="mt-3 pt-2 border-t border-black/5 flex items-center gap-3">
+                                            <button 
+                                              onClick={() => {
+                                                setEditingChatMessageId(m.id);
+                                                setEditingChatMessageText(m.message);
+                                              }}
+                                              className={`text-[10px] flex items-center gap-1 font-bold ${m.type === 'admin' ? 'text-white/80 hover:text-white' : 'text-blue-600 hover:text-blue-700'}`}
+                                            >
+                                              <Edit size={10} /> এডিট
+                                            </button>
+                                            <button 
+                                              onClick={() => handleDeleteMessage(m.id, 'everyone')}
+                                              className={`text-[10px] flex items-center gap-1 font-bold ${m.type === 'admin' ? 'text-red-100 hover:text-red-200' : 'text-red-600 hover:text-red-700'}`}
+                                            >
+                                              <Trash2 size={10} /> মুছুন
+                                            </button>
+                                          </div>
+                                        )}
                                       </div>
-                                      <button
-                                        onClick={() => handleDeleteMessage(m.id)}
-                                        className="absolute -top-3 -right-3 p-2 bg-red-600 text-white rounded-full opacity-0 group-hover/msg:opacity-100 transition-all shadow-xl hover:scale-110 active:scale-95 z-30 flex items-center justify-center"
-                                        title="মেসেজ মুছুন"
-                                      >
-                                        <Trash2 size={12} />
-                                      </button>
                                     </div>
                                   </div>
                                 ))}
@@ -3193,7 +5449,16 @@ export default function App() {
 
                             {/* Chat Input - Always at bottom */}
                             <div className="p-4 md:p-6 bg-white border-t border-gray-100 shadow-[0_-10px_20px_-15px_rgba(0,0,0,0.1)] z-40">
-                              <div className="flex gap-2 md:gap-3 bg-gray-50/80 p-1.5 md:p-2 rounded-[24px] border-2 border-green-50 focus-within:border-green-400 focus-within:bg-white focus-within:ring-8 focus-within:ring-green-100 transition-all shadow-inner">
+                              <div className="flex gap-2 md:gap-3 bg-gray-50/80 p-1.5 md:p-2 rounded-[24px] border-2 border-green-50 focus-within:border-green-400 focus-within:bg-white focus-within:ring-8 focus-within:ring-green-100 transition-all shadow-inner items-center">
+                                <label className="h-10 w-10 md:h-12 md:w-14 bg-white/50 hover:bg-white text-green-600 rounded-full flex items-center justify-center cursor-pointer transition-all shadow-sm border border-green-100 shrink-0">
+                                  <Camera size={20} />
+                                  <input 
+                                    type="file" 
+                                    className="hidden" 
+                                    accept="image/*" 
+                                    onChange={(e) => handleChatImageUpload(e, true, selectedAdminChatPhone || undefined)} 
+                                  />
+                                </label>
                                 <Input 
                                   placeholder="আপনার উত্তর লিখুন..." 
                                   id="admin-reply-input"
@@ -3284,6 +5549,29 @@ export default function App() {
                               value={config.promoServiceDefaultAmount} 
                               onChange={e => setConfig({...config, promoServiceDefaultAmount: Number(e.target.value)})} 
                             />
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-black uppercase tracking-wider text-green-700">উইথড্রয়াল প্রফিট/কমিশন ({config.promoServiceProfitType === 'percentage' ? '%' : '৳'})</label>
+                              <div className="flex bg-gray-100 rounded-lg p-1">
+                                <button 
+                                  onClick={() => setConfig({...config, promoServiceProfitType: 'fixed'})}
+                                  className={`px-2 py-1 text-[10px] font-bold rounded-md transition-all ${config.promoServiceProfitType === 'fixed' ? 'bg-white shadow-sm text-green-700' : 'text-gray-400'}`}
+                                >৳</button>
+                                <button 
+                                  onClick={() => setConfig({...config, promoServiceProfitType: 'percentage'})}
+                                  className={`px-2 py-1 text-[10px] font-bold rounded-md transition-all ${config.promoServiceProfitType === 'percentage' ? 'bg-white shadow-sm text-green-700' : 'text-gray-400'}`}
+                                >%</button>
+                              </div>
+                            </div>
+                            <Input 
+                              type="number"
+                              placeholder={config.promoServiceProfitType === 'percentage' ? "যেমন: ৫" : "যেমন: ৫০"} 
+                              className="h-12 rounded-xl focus:ring-green-500 border-green-200"
+                              value={config.promoServiceProfit} 
+                              onChange={e => setConfig({...config, promoServiceProfit: Number(e.target.value)})} 
+                            />
+                             <p className="text-[10px] text-gray-400">প্রতিটি বিথড্রয়াল অর্ডারে এই {config.promoServiceProfitType === 'percentage' ? 'শতাংশ' : 'টাকা'} আপনার লাভ হিসেবে যোগ হবে।</p>
                           </div>
                         </div>
 
@@ -3423,6 +5711,56 @@ export default function App() {
                         />
                       </div>
 
+                      <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 space-y-3">
+                        <p className="text-xs text-amber-700 font-bold uppercase">অটো ডেলিভারি চার্জ সেটিংস</p>
+                        <div className="flex items-center gap-2 mb-2">
+                          <input 
+                            type="checkbox" 
+                            id="enableAutoDeliveryCharge"
+                            checked={config.enableAutoDeliveryCharge} 
+                            onChange={e => setConfig({...config, enableAutoDeliveryCharge: e.target.checked})} 
+                            className="w-4 h-4 accent-amber-600 cursor-pointer"
+                          />
+                          <label htmlFor="enableAutoDeliveryCharge" className="text-sm font-bold cursor-pointer">অটো ডেলিভারি চার্জ চালু করুন</label>
+                        </div>
+                        {config.enableAutoDeliveryCharge && (
+                          <div className="grid grid-cols-2 gap-4 mt-2">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-amber-600 uppercase">ফ্রি ডেলিভারি মিনিমাম অর্ডার</label>
+                              <Input 
+                                type="number"
+                                placeholder="যেমন: ৫০০" 
+                                value={config.minOrderForFreeDelivery} 
+                                onChange={e => setConfig({...config, minOrderForFreeDelivery: Number(e.target.value)})} 
+                                className="bg-white"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-amber-600 uppercase">ডিফল্ট ডেলিভারি চার্জ</label>
+                              <Input 
+                                type="number"
+                                placeholder="যেমন: ৬০" 
+                                value={config.defaultDeliveryCharge} 
+                                onChange={e => setConfig({...config, defaultDeliveryCharge: Number(e.target.value)})} 
+                                className="bg-white"
+                              />
+                            </div>
+                            <div className="space-y-1 col-span-2">
+                              <label className="text-[10px] font-bold text-amber-600 uppercase">ডেলিভারি চার্জ বিজ্ঞপ্তি</label>
+                              <Input 
+                                placeholder="যেমন: ৫০০ টাকার পণ্য কিনলে ডেলিভারি চার্জ ফ্রি" 
+                                value={config.deliveryChargeNotice} 
+                                onChange={e => setConfig({...config, deliveryChargeNotice: e.target.value})} 
+                                className="bg-white"
+                              />
+                            </div>
+                          </div>
+                        )}
+                        <p className="text-[9px] text-amber-600 italic leading-tight">
+                          * এটি চালু থাকলে কাস্টমার অর্ডারের সময় অটোমেটিক চার্জ যোগ হবে যদি মিনিমাম অর্ডার থ্রেশহোল্ড এর নিচে থাকে।
+                        </p>
+                      </div>
+
                       <div className="space-y-2">
                         <label className="text-[10px] font-bold uppercase text-muted-foreground">অ্যাডমিন পাসওয়ার্ড</label>
                         <Input 
@@ -3436,9 +5774,117 @@ export default function App() {
                       </div>
                       <Input placeholder="অফার টাইটেল" value={config.heroTitle} onChange={e => setConfig({...config, heroTitle: e.target.value})} />
                       <Input placeholder="অফার সাবটেক্সট" value={config.heroSubtext} onChange={e => setConfig({...config, heroSubtext: e.target.value})} />
-                      <div className="grid grid-cols-2 gap-4">
-                        <Input placeholder="বিকাশ নাম্বার" value={config.bkashNumber} onChange={e => setConfig({...config, bkashNumber: e.target.value})} />
-                        <Input placeholder="নগদ নাম্বার" value={config.nagadNumber} onChange={e => setConfig({...config, nagadNumber: e.target.value})} />
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-4 p-4 bg-pink-50/50 rounded-2xl border border-pink-100">
+                          <label className="text-[10px] font-bold uppercase text-pink-700 tracking-wider">বিকাশ পেমেন্ট সেটিংস</label>
+                          <Input placeholder="বিকাশ নাম্বার" value={config.bkashNumber} onChange={e => setConfig({...config, bkashNumber: e.target.value})} className="bg-white" />
+                          <div className="flex gap-2">
+                            <Button 
+                              variant={config.bkashType === 'Personal' ? 'default' : 'outline'}
+                              size="sm"
+                              className="flex-1 text-xs"
+                              onClick={() => setConfig({...config, bkashType: 'Personal'})}
+                            >Personal</Button>
+                            <Button 
+                              variant={config.bkashType === 'Agent' ? 'default' : 'outline'}
+                              size="sm"
+                              className="flex-1 text-xs"
+                              onClick={() => setConfig({...config, bkashType: 'Agent'})}
+                            >Agent</Button>
+                          </div>
+                          <Input 
+                            placeholder="বিকাশ কাস্টমারদের জন্য বিস্তারিত (যেমন: সেন্ড মানি করুন)" 
+                            value={config.bkashDesc} 
+                            onChange={e => setConfig({...config, bkashDesc: e.target.value})} 
+                            className="bg-white text-xs"
+                          />
+                          {config.bkashType === 'Personal' && (
+                            <div className="flex items-center gap-2">
+                              <label className="text-[10px] font-bold text-pink-600 whitespace-nowrap">সেন্ড মানি খরচ (%):</label>
+                              <Input 
+                                type="number"
+                                placeholder="খরচ (যেমন: ২)" 
+                                value={config.bkashFeePercentage} 
+                                onChange={e => setConfig({...config, bkashFeePercentage: Number(e.target.value)})} 
+                                className="bg-white text-xs h-8"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="space-y-4 p-4 bg-red-50/50 rounded-2xl border border-red-100">
+                          <label className="text-[10px] font-bold uppercase text-red-700 tracking-wider">নগদ পেমেন্ট সেটিংস</label>
+                          <Input placeholder="নগদ নাম্বার" value={config.nagadNumber} onChange={e => setConfig({...config, nagadNumber: e.target.value})} className="bg-white" />
+                          <div className="flex gap-2">
+                            <Button 
+                              variant={config.nagadType === 'Personal' ? 'default' : 'outline'}
+                              size="sm"
+                              className="flex-1 text-xs"
+                              onClick={() => setConfig({...config, nagadType: 'Personal'})}
+                            >Personal</Button>
+                            <Button 
+                              variant={config.nagadType === 'Agent' ? 'default' : 'outline'}
+                              size="sm"
+                              className="flex-1 text-xs"
+                              onClick={() => setConfig({...config, nagadType: 'Agent'})}
+                            >Agent</Button>
+                          </div>
+                          <Input 
+                            placeholder="নগদ কাস্টমারদের জন্য বিস্তারিত (যেমন: ক্যাশ আউট করুন)" 
+                            value={config.nagadDesc} 
+                            onChange={e => setConfig({...config, nagadDesc: e.target.value})} 
+                            className="bg-white text-xs"
+                          />
+                          {config.nagadType === 'Personal' && (
+                            <div className="flex items-center gap-2">
+                              <label className="text-[10px] font-bold text-red-600 whitespace-nowrap">সেন্ড মানি খরচ (%):</label>
+                              <Input 
+                                type="number"
+                                placeholder="খরচ (যেমন: ২)" 
+                                value={config.nagadFeePercentage} 
+                                onChange={e => setConfig({...config, nagadFeePercentage: Number(e.target.value)})} 
+                                className="bg-white text-xs h-8"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="space-y-4 p-4 bg-purple-50/50 rounded-2xl border border-purple-100">
+                          <label className="text-[10px] font-bold uppercase text-purple-700 tracking-wider">রকেট পেমেন্ট সেটিংস</label>
+                          <Input placeholder="রকেট নাম্বার" value={config.rocketNumber} onChange={e => setConfig({...config, rocketNumber: e.target.value})} className="bg-white" />
+                          <div className="flex gap-2">
+                            <Button 
+                              variant={config.rocketType === 'Personal' ? 'default' : 'outline'}
+                              size="sm"
+                              className="flex-1 text-xs"
+                              onClick={() => setConfig({...config, rocketType: 'Personal'})}
+                            >Personal</Button>
+                            <Button 
+                              variant={config.rocketType === 'Agent' ? 'default' : 'outline'}
+                              size="sm"
+                              className="flex-1 text-xs"
+                              onClick={() => setConfig({...config, rocketType: 'Agent'})}
+                            >Agent</Button>
+                          </div>
+                          <Input 
+                            placeholder="রকেট কাস্টমারদের জন্য বিস্তারিত (যেমন: সেন্ড মানি করুন)" 
+                            value={config.rocketDesc} 
+                            onChange={e => setConfig({...config, rocketDesc: e.target.value})} 
+                            className="bg-white text-xs"
+                          />
+                          {config.rocketType === 'Personal' && (
+                            <div className="flex items-center gap-2">
+                              <label className="text-[10px] font-bold text-purple-600 whitespace-nowrap">সেন্ড মানি খরচ (%):</label>
+                              <Input 
+                                type="number"
+                                placeholder="খরচ (যেমন: ২)" 
+                                value={config.rocketFeePercentage} 
+                                onChange={e => setConfig({...config, rocketFeePercentage: Number(e.target.value)})} 
+                                className="bg-white text-xs h-8"
+                              />
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div className="grid grid-cols-1 gap-4">
                         <Input placeholder="হোয়াটসঅ্যাপ নাম্বার" value={config.whatsappNumber} onChange={e => setConfig({...config, whatsappNumber: e.target.value})} />
@@ -3459,15 +5905,78 @@ export default function App() {
                         <Input placeholder="প্রোমো বাটন টাইটেল" value={config.promoButtonTitle} onChange={e => setConfig({...config, promoButtonTitle: e.target.value})} />
                         <Input placeholder="প্রোমো বাটন লিঙ্ক" value={config.promoButtonLink} onChange={e => setConfig({...config, promoButtonLink: e.target.value})} />
                       </div>
-                      <Button onClick={handleUpdateConfig} className="w-full bg-blue-600">সেটিংস সেভ করুন</Button>
+                      <div className="pt-6 border-t border-gray-100">
+                        <Button 
+                          className="w-full h-12 rounded-2xl bg-blue-600 hover:bg-blue-700 font-bold shadow-lg shadow-blue-200"
+                          onClick={handleUpdateConfig}
+                        >
+                          সেটিংস সেভ করুন
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 </div>
               )}
-          </>
+            </div>
+          ) : (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <Card className="p-8 md:p-12 shadow-2xl border-none bg-white rounded-[40px] w-full max-w-md">
+                   <div className="h-20 w-20 bg-green-50 rounded-3xl flex items-center justify-center text-green-600 mx-auto mb-6 shadow-inner">
+                      <ShieldAlert size={40} />
+                   </div>
+                   <h3 className="text-2xl font-black text-gray-800 mb-2">অ্যাডমিন এক্সেস</h3>
+                   <p className="text-sm text-muted-foreground mb-8">অ্যাডমিন প্যানেলে ঢুকতে লগইন করুন বা সিকিউরিটি পাসওয়ার্ড দিন।</p>
+                   
+                   <div className="space-y-4 w-full">
+                      <Button 
+                        onClick={handleAdminGoogleLogin} 
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold h-14 rounded-2xl flex items-center justify-center gap-3 shadow-lg shadow-blue-100"
+                      >
+                        <LogIn size={20} /> Google দিয়ে লগইন করুন
+                      </Button>
+                      
+                      <div className="flex items-center gap-2 py-2">
+                        <div className="h-[1px] flex-1 bg-gray-100"></div>
+                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">অথবা পাসওয়ার্ড</span>
+                        <div className="h-[1px] flex-1 bg-gray-100"></div>
+                      </div>
+
+                      <div className="space-y-2 text-left">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">সিকিউরিটি পাসওয়ার্ড</label>
+                        <div className="relative">
+                          <Input 
+                            type={showPassword ? "text" : "password"} 
+                            placeholder="পাসওয়ার্ড লিখুন"
+                            value={passwordInput}
+                            onChange={e => setPasswordInput(e.target.value)}
+                            className="h-14 rounded-2xl bg-gray-50 border-none focus:ring-green-500 pl-4 pr-12 text-lg font-bold"
+                            onKeyDown={e => e.key === 'Enter' && handleAdminUnlock()}
+                          />
+                          <button 
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
+                          >
+                            {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <Button 
+                        onClick={handleAdminUnlock}
+                        className="w-full bg-gray-900 hover:bg-black text-white font-black h-14 rounded-2xl mt-2 shadow-xl shadow-gray-200"
+                      >
+                        প্যানেল আনলক করুন
+                      </Button>
+                      
+                      <p className="text-[10px] text-gray-400 mt-4 leading-tight">
+                        আপনার ইমেইল অ্যাডমিন হিসেবে নিবন্ধিত থাকলে সরাসরি Google দিয়ে লগইন করতে পারেন। অন্যথায় পাসওয়ার্ড ব্যবহার করুন।
+                      </p>
+                   </div>
+                </Card>
+              </div>
+            )}
+          </div>
         )}
-      </div>
-    )}
 
         {activeTab === "orders" && (
           <div className="max-w-5xl mx-auto space-y-6">
@@ -3483,34 +5992,142 @@ export default function App() {
               </Button>
             </div>
             
-            {!user ? (
-              <Card className="p-12 text-center">
-                <h3 className="text-2xl font-bold mb-4">অ্যাডমিন প্রবেশ</h3>
-                <Button onClick={loginWithGoogle} className="bg-green-600">
-                  Google দিয়ে লগইন করুন
-                </Button>
+            <div className="flex flex-col items-center justify-center py-10">
+              <Card className="w-full max-w-md p-8 shadow-sm border-none bg-white rounded-[32px]">
+                <div className="text-center mb-8">
+                  <div className="h-20 w-20 bg-green-50 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <PackageSearch size={40} />
+                  </div>
+                  <h3 className="text-2xl font-black text-gray-800">অর্ডার ট্র্যাক করুন</h3>
+                  <p className="text-sm text-muted-foreground mt-2">আপনার ফোন নাম্বার দিয়ে অর্ডারের সর্বশেষ অবস্থা জানুন</p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">ফোন নাম্বার</label>
+                    <Input 
+                      placeholder="আপনার মোবাইল নম্বর লিখুন" 
+                      value={trackingPhone}
+                      onChange={e => setTrackingPhone(e.target.value)}
+                      className="h-14 rounded-2xl bg-gray-50 border-none focus-visible:ring-green-500 text-lg font-bold px-6"
+                    />
+                  </div>
+                  <Button 
+                    onClick={handleTrackOrder}
+                    className="w-full h-14 bg-green-600 hover:bg-green-700 text-white font-black rounded-2xl shadow-lg shadow-green-100 transition-all hover:-translate-y-0.5"
+                  >
+                    সার্চ করুন
+                  </Button>
+                </div>
+
+                {phoneUser && (
+                  <div className="mt-6 pt-6 border-t">
+                    <Button 
+                      variant="outline" 
+                      onClick={() => setActiveTab("info")}
+                      className="w-full h-12 rounded-2xl border-green-100 text-green-700 font-bold hover:bg-green-50"
+                    >
+                      আমার প্রোফাইলে যান
+                    </Button>
+                  </div>
+                )}
               </Card>
-            ) : !isAdmin ? (
-              <Card className="p-12 text-center text-red-500">
-                <p className="mb-2">আপনি অ্যাডমিন নন।</p>
-                <p className="text-sm text-gray-500 mb-4">লগইন ইমেইল: {user.email}</p>
-                <Button variant="link" onClick={handleLogout}>লগআউট</Button>
-              </Card>
-            ) : (
-              <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-green-200">
-                <ListOrdered size={48} className="text-green-200 mx-auto mb-4" />
-                <h3 className="text-xl font-bold text-green-800 mb-4">অর্ডার ম্যানেজমেন্ট এখন অ্যাডমিন প্যানেলে</h3>
-                <Button 
-                  onClick={() => {
-                    setAdminSubTab('orders');
-                    setActiveTab("admin");
-                  }}
-                  className="bg-green-700 hover:bg-green-800"
-                >
-                  অ্যাডমিন প্যানেলে যান
-                </Button>
-              </div>
-            )}
+
+              {isTrackingActive && (
+                <div className="w-full mt-8 space-y-4">
+                  <h4 className="font-bold flex items-center gap-2 mb-2 ml-2">
+                    <div className="h-2 w-2 rounded-full bg-green-500" />
+                    সার্চ রেজাল্ট: {trackedOrders.length}টি অর্ডার
+                  </h4>
+                  {trackedOrders.length === 0 ? (
+                    <Card className="p-12 text-center bg-white rounded-3xl border border-dashed text-gray-400">
+                      এই নাম্বারে কোনো অর্ডার পাওয়া যায়নি।
+                    </Card>
+                  ) : (
+                    trackedOrders.map(order => (
+                      <Card key={order.id} className="overflow-hidden border-none shadow-sm bg-white rounded-3xl">
+                        <div className={`h-1.5 w-full ${
+                          order.status === 'pending' ? 'bg-yellow-400' : 
+                          order.status === 'confirmed' ? 'bg-blue-400' : 
+                          order.status === 'shipped' ? 'bg-indigo-400' :
+                          order.status === 'delivered' ? 'bg-green-400' : 'bg-red-500'
+                        }`} />
+                        <CardContent className="p-6">
+                            <div className="flex justify-between items-start mb-6">
+                              <div>
+                                <Badge className={
+                                  order.status === 'pending' ? 'bg-yellow-50 text-yellow-600 border-yellow-100' : 
+                                  order.status === 'confirmed' ? 'bg-blue-50 text-blue-600 border-blue-100' : 
+                                  order.status === 'shipped' ? 'bg-indigo-50 text-indigo-600 border-indigo-100' :
+                                  order.status === 'delivered' ? 'bg-green-50 text-green-600 border-green-100' : 'bg-red-50 text-red-600 border-red-100'
+                                }>
+                                  {statusLabels[order.status] || order.status}
+                                </Badge>
+                                <p className="text-[10px] text-muted-foreground mt-1 uppercase font-bold">অর্ডার আইডি: #{order.id.slice(-6)}</p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xl font-black text-green-800 tracking-tighter">৳{order.total}</p>
+                                <p className="text-[10px] font-bold text-gray-400">{order.createdAt?.toDate ? order.createdAt.toDate().toLocaleDateString('bn-BD') : ""}</p>
+                              </div>
+                            </div>
+
+                            <div className="relative flex justify-between items-center mb-8 px-4">
+                              <div className="absolute left-8 right-8 h-0.5 bg-gray-100 z-0" />
+                              {[1, 2, 3, 4].map(step => (
+                                <div 
+                                  key={step}
+                                  className={`relative z-10 h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-bold border-2 transition-all ${
+                                    getStatusStep(order.status) >= step 
+                                      ? "bg-green-600 border-green-600 text-white shadow-md shadow-green-200" 
+                                      : "bg-white border-gray-100 text-gray-300"
+                                  }`}
+                                >
+                                  {getStatusStep(order.status) > step ? <Check size={14} /> : step}
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="space-y-3 bg-gray-50/50 p-4 rounded-2xl border border-gray-100">
+                              {order.items.map((item, idx) => (
+                                <div key={idx} className="flex justify-between text-xs items-center">
+                                  <div className="flex items-center gap-2">
+                                    <span className="h-5 w-5 rounded-md bg-white border border-gray-100 flex items-center justify-center font-bold text-[10px] text-gray-400">{idx+1}</span>
+                                    <span className="text-gray-700 font-medium">{item.name}</span>
+                                  </div>
+                                  <span className="font-bold text-gray-900">৳{item.price} x {item.quantity}</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Payment Info in Tracking for Customer */}
+                            {(order.paymentMethod === 'bKash' || order.paymentMethod === 'Nagad') && order.paymentNumber && (
+                              <div className="mt-4 p-4 border border-green-100 bg-green-50/30 rounded-2xl flex items-center justify-between">
+                                <div>
+                                  <span className="text-[10px] font-bold text-green-600 uppercase block mb-0.5">পেমেন্ট নম্বর ({order.paymentMethod})</span>
+                                  <span className="text-sm font-mono font-bold text-green-800">{order.paymentNumber}</span>
+                                </div>
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  className="h-9 rounded-xl bg-white text-green-700 border border-green-100 hover:bg-green-50 font-bold gap-2"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(order.paymentNumber);
+                                    setToastMessage("নম্বর কপি করা হয়েছে");
+                                    setShowToast(true);
+                                  }}
+                                >
+                                  <Copy size={14} />
+                                  কপি
+                                </Button>
+                              </div>
+                            )}
+                        </CardContent>
+                      </Card>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </main>
@@ -3680,6 +6297,39 @@ export default function App() {
                     />
                   </div>
                   <p className="text-[10px] text-gray-400 italic">পণ্য যেভাবে ডেলিভারি পান, ঠিক সেভাবেই এই সেবাটি পাবেন।</p>
+                </div>
+
+                <div className="space-y-4">
+                   <label className="text-xs font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                     <Wallet className="text-green-600" size={14} /> ওয়ালেট সিলেক্ট করুন
+                   </label>
+                   <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { id: 'bKash', label: 'বিকাশ', color: 'bg-[#D12053]', icon: 'b' },
+                        { id: 'Nagad', label: 'নগদ', color: 'bg-[#F7941D]', icon: 'n' },
+                        { id: 'Rocket', label: 'রকেট', color: 'bg-[#8C3494]', icon: 'r' }
+                      ].map(wallet => (
+                        <button
+                          key={wallet.id}
+                          onClick={() => setPromoWallet(wallet.id)}
+                          className={`relative flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${
+                            promoWallet === wallet.id 
+                              ? "border-green-600 bg-green-50 shadow-md scale-[1.02]" 
+                              : "border-gray-100 hover:border-gray-200"
+                          }`}
+                        >
+                          <div className={`h-12 w-12 ${wallet.color} rounded-2xl flex items-center justify-center text-white font-black text-2xl shadow-lg transform transition-transform ${promoWallet === wallet.id ? 'scale-110' : ''}`}>
+                            {wallet.icon}
+                          </div>
+                          <span className="text-xs font-bold">{wallet.label}</span>
+                          {promoWallet === wallet.id && (
+                            <div className="absolute -top-2 -right-2 h-6 w-6 bg-green-600 rounded-full flex items-center justify-center text-white border-2 border-white shadow-sm">
+                               <Check size={14} strokeWidth={3} />
+                            </div>
+                          )}
+                        </button>
+                      ))}
+                   </div>
                 </div>
 
                 <div className="bg-green-50 p-6 rounded-[24px] border border-green-100 space-y-4">
@@ -3887,6 +6537,236 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Print Receipt Section - Visible Only During Print */}
+      <div id="print-section" className="hidden print:block fixed inset-0 bg-white z-[9999] p-4">
+        {printableOrder && (
+          <div className="max-w-[260px] mx-auto bg-white p-4 border border-gray-100 rounded-none shadow-none">
+            <div className="text-center mb-4">
+              <h2 className="text-xl font-black text-gray-900 leading-tight">{config.storeName}</h2>
+              <p className="text-[10px] font-bold text-gray-600">{config.storeSubtext}</p>
+              <div className="mt-1 text-[8px] text-gray-500 flex flex-col items-center">
+                <span>{config.storeAddress}</span>
+                <span>মোবাইল: {config.storePhone}</span>
+              </div>
+            </div>
+            
+            <div className="border-t border-b border-dashed py-3 my-3 space-y-1">
+              <div className="flex justify-between text-[10px]">
+                <span className="font-bold">তারিখ:</span>
+                <span>{printableOrder.createdAt?.toDate ? printableOrder.createdAt.toDate().toLocaleString('bn-BD') : new Date().toLocaleString('bn-BD')}</span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="font-bold">অর্ডার আইডি:</span>
+                <span className="font-mono">#{printableOrder.id.slice(-6).toUpperCase()}</span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="font-bold">কাস্টমার:</span>
+                <span>{printableOrder.customerName}</span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="font-bold">ফোন:</span>
+                <span>{printableOrder.customerPhone}</span>
+              </div>
+              {printableOrder.customerAddress && printableOrder.customerAddress !== "In-Store" && printableOrder.customerAddress !== "প্রমোশনাল সার্ভিস" && (
+                <div className="flex justify-between text-[10px]">
+                  <span className="font-bold shrink-0">ঠিকানা:</span>
+                  <span className="text-right ml-4 break-words">{printableOrder.customerAddress}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex justify-between text-[10px] font-black border-b border-gray-100 pb-1">
+                <span>বিবরণ</span>
+                <div className="flex gap-4">
+                  <span>পরিমাণ</span>
+                  <span>দাম</span>
+                </div>
+              </div>
+              {printableOrder.items.map((item, idx) => (
+                <div key={idx} className="flex justify-between text-[10px] leading-tight pb-1">
+                  <span className="truncate max-w-[120px]">{item.name}</span>
+                  <div className="flex gap-4">
+                    <span>{item.quantity}</span>
+                    <span className="font-bold italic">৳{item.price * item.quantity}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 pt-3 border-t border-dashed space-y-1">
+              <div className="flex justify-between text-[10px]">
+                <span>সাব-টোটাল</span>
+                <span className="font-bold">৳{printableOrder.subtotal || printableOrder.totalPrice - (printableOrder.paymentFee || 0)}</span>
+              </div>
+              {(printableOrder.paymentFee || 0) > 0 && (
+                <div className="flex justify-between text-[10px]">
+                  <span>পেমেন্ট চার্জ</span>
+                  <span className="font-bold">৳{printableOrder.paymentFee}</span>
+                </div>
+              )}
+              {(printableOrder.deliveryCharge || 0) > 0 && (
+                <div className="flex justify-between text-[10px]">
+                  <span>ডেলিভারি চার্জ</span>
+                  <span className="font-bold">৳{printableOrder.deliveryCharge}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-sm font-black border-t border-gray-900 pt-2 pb-1">
+                <span>সর্বমোট</span>
+                <span>৳{printableOrder.totalPrice}</span>
+              </div>
+              <div className="text-[9px] text-gray-700 italic border-t border-gray-50 pt-2">
+                <p>পেমেন্ট: {printableOrder.paymentMethod}</p>
+                {printableOrder.paymentNumber && <p>পেমেন্ট নাম্বার: {printableOrder.paymentNumber}</p>}
+              </div>
+            </div>
+
+            <div className="mt-8 text-center space-y-1">
+              <p className="text-[9px] font-bold text-gray-900 italic">পণ্য পরিবর্তনের জন্য এই মেমোটি অবশ্যই সাথে আনবেন। ধন্যবাদ!</p>
+              <div className="flex justify-center items-center gap-2 pt-2">
+                <div className="h-[1px] w-6 bg-gray-200" />
+                <span className="text-[7px] uppercase tracking-widest text-gray-400 font-bold">ওয়াসিম স্টোর</span>
+                <div className="h-[1px] w-6 bg-gray-200" />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Print View Overlay (Preview before printing) */}
+      <AnimatePresence>
+        {showPrintMemo && printableOrder && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white w-full max-w-md rounded-3xl overflow-hidden shadow-2xl"
+            >
+              <div className="bg-purple-600 p-6 text-white flex justify-between items-center">
+                <div>
+                  <h3 className="text-xl font-bold">ক্যাশ মেমো প্রিভিউ</h3>
+                  <p className="text-purple-100 text-xs">আপনার প্রিন্টার থেকে রিসিট প্রিন্ট করুন</p>
+                </div>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="text-white hover:bg-white/20 rounded-full"
+                  onClick={() => setShowPrintMemo(false)}
+                >
+                  <X />
+                </Button>
+              </div>
+
+              <div className="p-8 max-h-[60vh] overflow-y-auto">
+                <div className="max-w-[260px] mx-auto bg-gray-50 p-4 rounded-2xl border border-dashed border-gray-200 shadow-inner">
+                  <div className="text-center mb-4">
+                    <h2 className="text-base font-black text-gray-900">{config.storeName}</h2>
+                    <p className="text-[9px] text-gray-500 font-bold">{config.storeAddress}</p>
+                  </div>
+                  
+                  <div className="space-y-1 mb-3 border-b border-gray-200 pb-3">
+                    <div className="flex justify-between text-[9px]">
+                      <span className="text-gray-500">অর্ডার আইডি:</span>
+                      <span className="font-bold">#{printableOrder.id.slice(-6).toUpperCase()}</span>
+                    </div>
+                    <div className="flex justify-between text-[9px]">
+                      <span className="text-gray-500">ক্রেতা:</span>
+                      <span className="font-bold">{printableOrder.customerName}</span>
+                    </div>
+                    <div className="flex justify-between text-[9px]">
+                      <span className="text-gray-500">ফোন:</span>
+                      <span className="font-bold">{printableOrder.customerPhone}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    {printableOrder.items.map((item, idx) => (
+                      <div key={idx} className="flex justify-between text-[9px]">
+                        <span className="truncate max-w-[140px]">{item.name} x {item.quantity}</span>
+                        <span className="font-bold">৳{item.price * item.quantity}</span>
+                      </div>
+                    ))}
+                    <div className="pt-1.5 border-t border-gray-900 space-y-1 mt-1.5">
+                      <div className="flex justify-between text-[9px] text-gray-500">
+                        <span>সাব-টোটাল:</span>
+                        <span>৳{printableOrder.subtotal || printableOrder.totalPrice - (printableOrder.paymentFee || 0)}</span>
+                      </div>
+                      {(printableOrder.paymentFee || 0) > 0 && (
+                        <div className="flex justify-between text-[9px] text-gray-500">
+                          <span>পেমেন্ট চার্জ:</span>
+                          <span>৳{printableOrder.paymentFee}</span>
+                        </div>
+                      )}
+                      {(printableOrder.deliveryCharge || 0) > 0 && (
+                        <div className="flex justify-between text-[9px] text-gray-500">
+                          <span>ডেলিভারি চার্জ:</span>
+                          <span>৳{printableOrder.deliveryCharge}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-xs font-black pt-1">
+                        <span>সর্বমোট:</span>
+                        <span>৳{printableOrder.totalPrice}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 bg-gray-50 flex flex-wrap gap-4">
+                <Button 
+                  variant="outline" 
+                  className="flex-1 h-12 rounded-2xl font-bold border-gray-200"
+                  onClick={() => setShowPrintMemo(false)}
+                >
+                  বন্ধ করুন
+                </Button>
+                <Button 
+                  className="flex-1 h-12 rounded-2xl font-bold bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-100"
+                  onClick={() => {
+                    const text = `🛒 *অর্ডার রিসিট - ${config.storeName}*\n\n` +
+                      `অর্ডার আইডি: #${printableOrder.id.slice(-6).toUpperCase()}\n` +
+                      `কাস্টমার: ${printableOrder.customerName}\n` +
+                      `ফোন: ${printableOrder.customerPhone}\n` +
+                      (printableOrder.customerAddress && printableOrder.customerAddress !== "In-Store" ? `ঠিকানা: ${printableOrder.customerAddress}\n` : "") +
+                      `\n*পণ্যসমূহ:*\n` +
+                      printableOrder.items.map(i => `- ${i.name} x ${i.quantity} = ৳${i.price * i.quantity}`).join('\n') +
+                      `\n\nসাব-টোটাল: ৳${printableOrder.subtotal || printableOrder.totalPrice - (printableOrder.paymentFee || 0)}\n` +
+                      (printableOrder.paymentFee ? `পেমেন্ট চার্জ: ৳${printableOrder.paymentFee}\n` : "") +
+                      (printableOrder.deliveryCharge ? `ডেলিভারি চার্জ: ৳${printableOrder.deliveryCharge}\n` : "") +
+                      `*সর্বমোট: ৳${printableOrder.totalPrice}*\n` +
+                      `পেমেন্ট: ${printableOrder.paymentMethod}\n\n` +
+                      `ধন্যবাদ!`;
+                    navigator.share?.({
+                      title: 'অর্ডার রিসিট',
+                      text: text
+                    }).catch(() => {
+                      navigator.clipboard.writeText(text);
+                      setToastMessage("রিসিট কপি করা হয়েছে!");
+                      setShowToast(true);
+                    });
+                  }}
+                >
+                  <Share2 className="mr-2 h-4 w-4" />
+                  শেয়ার করুন
+                </Button>
+                <Button 
+                  className="w-full h-12 rounded-2xl font-bold bg-green-600 hover:bg-green-700 shadow-lg shadow-green-100"
+                  onClick={() => {
+                    setTimeout(() => {
+                      window.print();
+                    }, 500);
+                  }}
+                >
+                  <Printer className="mr-2 h-4 w-4" />
+                  প্রিন্ট করুন
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

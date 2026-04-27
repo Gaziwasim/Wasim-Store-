@@ -25,8 +25,9 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && 
-        (request.auth.token.email == get(/databases/$(database)/documents/config/store).data.adminEmail || 
-         request.auth.token.email == "mdgaziwasim@gmail.com");
+        (request.auth.token.email == "mdgaziwasim@gmail.com" || 
+         (exists(/databases/$(database)/documents/config/store) && 
+          request.auth.token.email == get(/databases/$(database)/documents/config/store).data.adminEmail));
     }
 
     function isValidProduct(data) {
@@ -39,11 +40,14 @@ service cloud.firestore {
 
     function isValidOrder(data) {
       return data.customerName is string && data.customerName.size() > 0 && data.customerName.size() < 100 &&
-             data.customerPhone is string && data.customerPhone.size() >= 11 && data.customerPhone.size() < 20 &&
+             data.customerPhone is string && (data.customerPhone.size() >= 11 || data.customerPhone == "POS") && data.customerPhone.size() < 20 &&
              data.customerAddress is string && data.customerAddress.size() > 0 && data.customerAddress.size() < 500 &&
              data.items is list && data.items.size() > 0 && data.items.size() < 100 &&
              data.totalPrice is number && data.totalPrice >= 0 &&
              data.status in ['pending', 'confirmed', 'delivered', 'cancelled'] &&
+             data.paymentMethod in ['Cash on Delivery', 'bKash', 'Nagad', 'Rocket', 'Bank Transfer', 'Cash', 'Online'] &&
+             data.createdAt == request.time &&
+             (!('isShopSale' in data) || data.isShopSale is bool) &&
              (!('location' in data) || data.location == null || (data.location.lat is number && data.location.lng is number)) &&
              (!('uid' in data) || data.uid == null || data.uid is string) &&
              (!('phoneUser' in data) || data.phoneUser == null || data.phoneUser is string);
@@ -70,14 +74,14 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow create: if isValidOrder(request.resource.data);
       allow read: if true; // In a production app, we would restrict to 'resource.data.customerPhone == [auth_phone]'
-      allow update, delete: if isAdmin();
+      allow update, delete: if isAuthenticated(); // Allow authenticated users to manage orders
     }
 
     // Customers
     match /customers/{phone} {
       allow read: if true;
       allow create: if isValidCustomer(request.resource.data);
-      allow update: if isAdmin() || (isValidCustomer(request.resource.data) && (!('isBlocked' in request.resource.data) || request.resource.data.isBlocked == resource.data.isBlocked));
+      allow update: if isAuthenticated() || (isValidCustomer(request.resource.data) && (!('isBlocked' in request.resource.data) || request.resource.data.isBlocked == resource.data.isBlocked));
       allow delete: if isAdmin();
     }
 
@@ -97,7 +101,7 @@ service cloud.firestore {
     // Categories
     match /categories/{categoryId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write, update, delete: if isAdmin();
     }
 
     // Reviews
@@ -119,6 +123,16 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Expenses
+    match /expenses/{expenseId} {
+      allow read, write: if true;
+    }
+
+    // Staff
+    match /staff/{staffId} {
+      allow read, write: if true;
+    }
+
     // Support Messages
     match /messages/{messageId} {
       // Valid message structure check
@@ -130,8 +144,8 @@ service cloud.firestore {
       }
 
       allow create: if isValidMessage(request.resource.data);
-      allow read: if true; // Open read for simplicity to fix missing data issues
-      allow update, delete: if isAdmin();
+      allow read: if true; 
+      allow update, delete: if isAdmin() || (resource.data.type == 'customer');
     }
   }
 }
